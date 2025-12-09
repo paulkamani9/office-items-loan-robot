@@ -1,0 +1,40 @@
+# Ignore Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environment
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+robot.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Model files (too large for git)
+models/*.pt
+models/*.pth
+models/*.weights
+
+# Backup files
+*.backup
+*.bak
+config/*backup*
+
+# Temporary files
+*.tmp
+temp/

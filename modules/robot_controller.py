@@ -1,0 +1,410 @@
+"""
+Robot controller for Yahboom Dofbot arm
+Handles all robot movements and operations
+"""
+
+import time
+from typing import List, Optional, Callable, Dict
+import sys
+from pathlib import Path
+sys.path.append(str(Path(__file__).parent.parent))
+
+try:
+    from Arm_Lib import Arm_Device
+    ARM_LIB_AVAILABLE = True
+except ImportError:
+    ARM_LIB_AVAILABLE = False
+    print("Warning: Arm_Lib not available. Robot control will not work.")
+
+from config.settings import (
+    SPEED_NORMAL,
+    SPEED_SLOW,
+    SPEED_FAST
+)
+from utils.logger import RobotLogger
+from modules.position_manager import PositionManager
+
+
+class RobotController:
+    """
+    Control robot arm movements
+    """
+    
+    def __init__(self, position_manager: PositionManager):
+        """
+        Initialize Arm_Lib device
+        IMPORTANT: Arm_Lib is copied into project root
+        Import as: from Arm_Lib import Arm_Device
+        """
+        self.logger = RobotLogger()
+        self.position_manager = position_manager
+        self.arm = None
+        self.current_angles = [90, 90, 90, 90, 90, 90]
+        
+        if not ARM_LIB_AVAILABLE:
+            self.logger.error("✗ Arm_Lib not available - robot control disabled")
+            return
+        
+        try:
+            self.arm = Arm_Device()
+            time.sleep(0.1)
+            self.logger.info("✓ Robot arm initialized")
+            
+            # Move to home position
+            self.move_home()
+            
+        except Exception as e:
+            self.logger.error(f"✗ Failed to initialize robot arm: {e}")
+            self.arm = None
+    
+    def is_connected(self) -> bool:
+        """Check if robot is connected"""
+        return self.arm is not None
+    
+    def move_to_position(self, position_name: str, speed: int = SPEED_NORMAL) -> bool:
+        """
+        Move robot to named position from positions.json
+        
+        Args:
+            position_name: 'home', 'drop_zone', 'chair_storage', etc.
+            speed: Movement speed in ms
+        
+        Returns:
+            success: bool
+        """
+        if not self.is_connected():
+            self.logger.error("Robot not connected")
+            return False
+        
+        # Get position from manager
+        angles = self.position_manager.get_position(position_name)
+        if angles is None:
+            self.logger.error(f"Position not found: {position_name}")
+            return False
+        
+        # Move to position
+        self.logger.info(f"Moving to {position_name}: {angles}")
+        return self.move_to_joint_angles(angles, speed)
+    
+    def move_to_joint_angles(self, angles: List[int], speed: int = SPEED_NORMAL) -> bool:
+        """
+        Move to specific joint angles [j1, j2, j3, j4, j5, j6]
+        
+        Includes:
+        - Validation of angle ranges
+        - Wait for movement completion
+        - Error handling
+        """
+        if not self.is_connected():
+            self.logger.error("Robot not connected")
+            return False
+        
+        if not self.position_manager.validate_position(angles):
+            self.logger.error(f"Invalid position: {angles}")
+            return False
+        
+        try:
+            # Send movement command
+            self.arm.Arm_serial_servo_write6(
+                angles[0], angles[1], angles[2],
+                angles[3], angles[4], angles[5],
+                speed
+            )
+            
+            # Update current angles
+            self.current_angles = angles.copy()
+            
+            # Wait for movement to complete
+            # Speed is in ms, add small buffer
+            wait_time = speed / 1000.0 + 0.5
+            time.sleep(wait_time)
+            
+            self.logger.debug(f"Moved to {angles}")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Movement error: {e}")
+            return False
+    
+    def open_gripper(self) -> bool:
+        """Open gripper to configured GRIPPER_OPEN angle"""
+        if not self.is_connected():
+            return False
+        
+        angle = self.position_manager.get_position('gripper_open')
+        if angle is None:
+            return False
+        
+        try:
+            self.arm.Arm_serial_servo_write(6, angle, 500)
+            time.sleep(0.6)
+            self.logger.debug("Gripper opened")
+            return True
+        except Exception as e:
+            self.logger.error(f"Failed to open gripper: {e}")
+            return False
+    
+    def close_gripper(self) -> bool:
+        """Close gripper to configured GRIPPER_CLOSED angle"""
+        if not self.is_connected():
+            return False
+        
+        angle = self.position_manager.get_position('gripper_closed')
+        if angle is None:
+            return False
+        
+        try:
+            self.arm.Arm_serial_servo_write(6, angle, 500)
+            time.sleep(0.6)
+            self.logger.debug("Gripper closed")
+            return True
+        except Exception as e:
+            self.logger.error(f"Failed to close gripper: {e}")
+            return False
+    
+    def get_current_angles(self) -> List[int]:
+        """
+        Read and return current joint angles
+        Used for real-time display in GUI
+        """
+        # Note: Yahboom Dofbot may not support reading angles
+        # Return last known angles instead
+        return self.current_angles.copy()
+    
+    def execute_pick_sequence(self, from_position: str, 
+                             status_callback: Optional[Callable] = None) -> bool:
+        """
+        Complete pick sequence:
+        1. Move to pickup position
+        2. Open gripper
+        3. Wait briefly
+        4. Close gripper
+        5. Lift slightly
+        """
+        if status_callback:
+            status_callback(f"Picking from {from_position}...")
+        
+        # Move to position
+        if not self.move_to_position(from_position, SPEED_NORMAL):
+            return False
+        
+        # Open gripper
+        if not self.open_gripper():
+            return False
+        
+        # Wait for stability
+        time.sleep(0.5)
+        
+        # Close gripper
+        if not self.close_gripper():
+            return False
+        
+        # Wait for grip
+        time.sleep(0.5)
+        
+        # Lift slightly (move up on joint 2)
+        lifted_angles = self.current_angles.copy()
+        lifted_angles[1] = max(0, lifted_angles[1] - 10)  # Lift 10 degrees
+        if not self.move_to_joint_angles(lifted_angles, SPEED_SLOW):
+            return False
+        
+        self.logger.info(f"Pick sequence completed from {from_position}")
+        return True
+    
+    def execute_place_sequence(self, to_position: str,
+                              status_callback: Optional[Callable] = None) -> bool:
+        """
+        Complete place sequence:
+        1. Move to place position
+        2. Open gripper
+        3. Wait briefly
+        4. Lift to safe height
+        """
+        if status_callback:
+            status_callback(f"Placing at {to_position}...")
+        
+        # Move to position
+        if not self.move_to_position(to_position, SPEED_NORMAL):
+            return False
+        
+        # Open gripper
+        if not self.open_gripper():
+            return False
+        
+        # Wait for release
+        time.sleep(0.5)
+        
+        # Lift slightly
+        lifted_angles = self.current_angles.copy()
+        lifted_angles[1] = max(0, lifted_angles[1] - 10)
+        if not self.move_to_joint_angles(lifted_angles, SPEED_SLOW):
+            return False
+        
+        self.logger.info(f"Place sequence completed at {to_position}")
+        return True
+    
+    def borrow_item(self, item_name: str, 
+                   status_callback: Optional[Callable] = None) -> Dict:
+        """
+        Complete borrow operation:
+        1. Pick from item's storage position
+        2. Deliver to drop zone
+        3. Return to home
+        
+        Returns status at each step for GUI updates
+        """
+        try:
+            # Get storage position for item
+            storage_pos = self.position_manager.get_storage_position_for_item(item_name)
+            if storage_pos is None:
+                return {'success': False, 'message': f'No storage position for {item_name}'}
+            
+            # Step 1: Move to storage and pick
+            if status_callback:
+                status_callback(f"Moving to {item_name} storage...")
+            
+            if not self.execute_pick_sequence(storage_pos, status_callback):
+                raise Exception(f"Failed to pick from {storage_pos}")
+            
+            # Step 2: Deliver to drop zone
+            if status_callback:
+                status_callback("Delivering to drop zone...")
+            
+            if not self.execute_place_sequence('drop_zone', status_callback):
+                raise Exception("Failed to place at drop zone")
+            
+            # Step 3: Return home
+            if status_callback:
+                status_callback("Returning home...")
+            
+            if not self.move_home():
+                raise Exception("Failed to return home")
+            
+            if status_callback:
+                status_callback(f"✓ {item_name} borrowed successfully!")
+            
+            self.logger.info(f"Borrow completed: {item_name}")
+            return {'success': True, 'message': 'Borrow completed'}
+            
+        except Exception as e:
+            self.logger.error(f"Borrow failed: {e}")
+            
+            # Recovery: Try to return home safely
+            try:
+                self.move_home()
+            except:
+                pass
+            
+            return {'success': False, 'message': str(e)}
+    
+    def return_item(self, item_name: str,
+                   status_callback: Optional[Callable] = None) -> Dict:
+        """
+        Complete return operation:
+        1. Pick from drop zone
+        2. Deliver to item's storage position
+        3. Return to home
+        
+        Returns status at each step for GUI updates
+        """
+        try:
+            # Get storage position for item
+            storage_pos = self.position_manager.get_storage_position_for_item(item_name)
+            if storage_pos is None:
+                return {'success': False, 'message': f'No storage position for {item_name}'}
+            
+            # Step 1: Pick from drop zone
+            if status_callback:
+                status_callback("Picking item from drop zone...")
+            
+            if not self.execute_pick_sequence('drop_zone', status_callback):
+                raise Exception("Failed to pick from drop zone")
+            
+            # Step 2: Deliver to storage
+            if status_callback:
+                status_callback(f"Storing {item_name}...")
+            
+            if not self.execute_place_sequence(storage_pos, status_callback):
+                raise Exception(f"Failed to place at {storage_pos}")
+            
+            # Step 3: Return home
+            if status_callback:
+                status_callback("Returning home...")
+            
+            if not self.move_home():
+                raise Exception("Failed to return home")
+            
+            if status_callback:
+                status_callback(f"✓ {item_name} returned successfully!")
+            
+            self.logger.info(f"Return completed: {item_name}")
+            return {'success': True, 'message': 'Return completed'}
+            
+        except Exception as e:
+            self.logger.error(f"Return failed: {e}")
+            
+            # Recovery: Try to return home safely
+            try:
+                self.move_home()
+            except:
+                pass
+            
+            return {'success': False, 'message': str(e)}
+    
+    def move_to_observation_position(self, status_callback: Optional[Callable] = None) -> bool:
+        """
+        Move to observation position (above drop zone for return mode)
+        """
+        if status_callback:
+            status_callback("Moving to observation position...")
+        
+        # Use drop zone position but lift higher
+        drop_zone_angles = self.position_manager.get_position('drop_zone')
+        if drop_zone_angles is None:
+            return False
+        
+        # Lift camera higher for better view
+        observation_angles = drop_zone_angles.copy()
+        observation_angles[1] = max(0, observation_angles[1] - 15)
+        
+        return self.move_to_joint_angles(observation_angles, SPEED_NORMAL)
+    
+    def emergency_stop(self):
+        """
+        Immediate stop of all movements
+        Safe shutdown sequence
+        """
+        self.logger.warning("EMERGENCY STOP ACTIVATED")
+        
+        if not self.is_connected():
+            return
+        
+        try:
+            # Stop all servos
+            for i in range(1, 7):
+                self.arm.Arm_serial_servo_write(i, self.current_angles[i-1], 0)
+            
+            self.logger.info("Emergency stop completed")
+            
+        except Exception as e:
+            self.logger.error(f"Emergency stop error: {e}")
+    
+    def move_home(self) -> bool:
+        """Return to home position"""
+        return self.move_to_position('home', SPEED_NORMAL)
+    
+    def cleanup(self):
+        """Safe shutdown of robot"""
+        if self.is_connected():
+            try:
+                self.move_home()
+                time.sleep(1)
+                del self.arm
+                self.arm = None
+                self.logger.info("Robot shutdown complete")
+            except Exception as e:
+                self.logger.error(f"Cleanup error: {e}")
+    
+    def __del__(self):
+        """Ensure cleanup on deletion"""
+        self.cleanup()
