@@ -60,6 +60,8 @@ class PositionManager:
         self.positions = {
             'home': DEFAULT_HOME_POSITION.copy(),
             'drop_zone': DEFAULT_DROP_ZONE_POSITION.copy(),
+            'observation_position': [90, 60, 60, 60, 90, 90],  # Camera view position for classification
+            'travel_position': [90, 80, 30, 80, 90, 90],  # Safe height for carrying items
             'chair_storage': DEFAULT_HOME_POSITION.copy(),
             'keyboard_storage': DEFAULT_HOME_POSITION.copy(),
             'mouse_storage': DEFAULT_HOME_POSITION.copy(),

@@ -53,7 +53,7 @@ class TestScreen:
         back_btn = tk.Button(
             header,
             text="← Back",
-            command=self.back_callback,
+            command=self.handle_back,
             font=('Arial', 12),
             bg=THEME_COLOR_SECONDARY,
             fg=THEME_COLOR_TEXT_LIGHT,
@@ -148,6 +148,92 @@ class TestScreen:
             cursor='hand2'
         )
         test_camera_btn.pack(side=tk.LEFT, padx=5)
+        
+        # Test Servo Controls (for debugging)
+        servo_label = tk.Label(
+            scrollable_frame,
+            text="Test Individual Servos",
+            font=('Arial', 16, 'bold'),
+            bg=THEME_COLOR_PRIMARY,
+            fg=THEME_COLOR_TEXT_LIGHT,
+            anchor=tk.W
+        )
+        servo_label.pack(fill=tk.X, pady=(20, 10))
+        
+        servo_frame = tk.Frame(scrollable_frame, bg=THEME_COLOR_PRIMARY)
+        servo_frame.pack(fill=tk.X, pady=(0, 20))
+        
+        # Test Gripper (Servo 6)
+        gripper_open_btn = tk.Button(
+            servo_frame,
+            text="Open Gripper (S6)",
+            command=self.test_gripper_open,
+            font=('Arial', 11, 'bold'),
+            bg=THEME_COLOR_SUCCESS,
+            fg=THEME_COLOR_TEXT_LIGHT,
+            relief='flat',
+            padx=15,
+            pady=8,
+            cursor='hand2'
+        )
+        gripper_open_btn.pack(side=tk.LEFT, padx=5)
+        
+        gripper_close_btn = tk.Button(
+            servo_frame,
+            text="Close Gripper (S6)",
+            command=self.test_gripper_close,
+            font=('Arial', 11, 'bold'),
+            bg='#E74C3C',
+            fg=THEME_COLOR_TEXT_LIGHT,
+            relief='flat',
+            padx=15,
+            pady=8,
+            cursor='hand2'
+        )
+        gripper_close_btn.pack(side=tk.LEFT, padx=5)
+        
+        # Test Wrist (Servo 5)
+        wrist_mid_btn = tk.Button(
+            servo_frame,
+            text="Wrist 90° (S5)",
+            command=lambda: self.test_wrist(90),
+            font=('Arial', 11, 'bold'),
+            bg=THEME_COLOR_ACCENT,
+            fg=THEME_COLOR_TEXT_LIGHT,
+            relief='flat',
+            padx=15,
+            pady=8,
+            cursor='hand2'
+        )
+        wrist_mid_btn.pack(side=tk.LEFT, padx=5)
+        
+        wrist_left_btn = tk.Button(
+            servo_frame,
+            text="Wrist 0° (S5)",
+            command=lambda: self.test_wrist(0),
+            font=('Arial', 11, 'bold'),
+            bg=THEME_COLOR_ACCENT,
+            fg=THEME_COLOR_TEXT_LIGHT,
+            relief='flat',
+            padx=15,
+            pady=8,
+            cursor='hand2'
+        )
+        wrist_left_btn.pack(side=tk.LEFT, padx=5)
+        
+        wrist_right_btn = tk.Button(
+            servo_frame,
+            text="Wrist 180° (S5)",
+            command=lambda: self.test_wrist(180),
+            font=('Arial', 11, 'bold'),
+            bg=THEME_COLOR_ACCENT,
+            fg=THEME_COLOR_TEXT_LIGHT,
+            relief='flat',
+            padx=15,
+            pady=8,
+            cursor='hand2'
+        )
+        wrist_right_btn.pack(side=tk.LEFT, padx=5)
     
     def create_item_buttons(self, parent, operation):
         """Create grid of item test buttons"""
@@ -375,6 +461,63 @@ class TestScreen:
             messagebox.showerror("Test Failed", message)
             self.status_callback("Test failed")
     
+    def test_gripper_open(self):
+        """Test opening the gripper (servo 6)"""
+        if not self.robot.is_connected():
+            messagebox.showerror("Error", "Robot not connected")
+            return
+        
+        self.status_callback("Testing gripper open...")
+        try:
+            result = self.robot.open_gripper()
+            if result:
+                messagebox.showinfo("Success", "Gripper opened successfully!")
+            else:
+                messagebox.showerror("Failed", "Failed to open gripper")
+        except Exception as e:
+            messagebox.showerror("Error", f"Gripper test error: {e}")
+        self.status_callback("Ready")
+    
+    def test_gripper_close(self):
+        """Test closing the gripper (servo 6)"""
+        if not self.robot.is_connected():
+            messagebox.showerror("Error", "Robot not connected")
+            return
+        
+        self.status_callback("Testing gripper close...")
+        try:
+            result = self.robot.close_gripper()
+            if result:
+                messagebox.showinfo("Success", "Gripper closed successfully!")
+            else:
+                messagebox.showerror("Failed", "Failed to close gripper")
+        except Exception as e:
+            messagebox.showerror("Error", f"Gripper test error: {e}")
+        self.status_callback("Ready")
+    
+    def test_wrist(self, angle: int):
+        """Test moving the wrist (servo 5) to specific angle"""
+        if not self.robot.is_connected():
+            messagebox.showerror("Error", "Robot not connected")
+            return
+        
+        self.status_callback(f"Testing wrist to {angle}°...")
+        try:
+            result = self.robot.move_wrist(angle, speed=500)
+            if result:
+                messagebox.showinfo("Success", f"Wrist moved to {angle}°!")
+            else:
+                messagebox.showerror("Failed", f"Failed to move wrist to {angle}°")
+        except Exception as e:
+            messagebox.showerror("Error", f"Wrist test error: {e}")
+        self.status_callback("Ready")
+    
+    def handle_back(self):
+        """Handle back button - cleanup and return to main menu"""
+        self.cleanup()
+        self.back_callback()
+    
     def cleanup(self):
         """Cleanup when leaving screen"""
+        self.logger.info("Cleaning up test screen")
         self.close_camera_window()

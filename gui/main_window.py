@@ -178,16 +178,30 @@ class MainWindow:
             threading.Event().wait(0.5)  # Update every 500ms
     
     def clear_content(self):
-        """Clear current content frame"""
+        """Clear current content frame and cleanup any running processes"""
+        # First cleanup current screen (stop any running threads/processes)
+        if self.current_screen is not None:
+            if hasattr(self.current_screen, 'cleanup'):
+                try:
+                    self.current_screen.cleanup()
+                except Exception as e:
+                    self.logger.debug(f"Screen cleanup error: {e}")
+            self.current_screen = None
+        
+        # Destroy the screen frame
         if self.current_screen_frame is not None:
-            self.current_screen_frame.destroy()
+            try:
+                self.current_screen_frame.destroy()
+            except Exception as e:
+                self.logger.debug(f"Frame destroy error: {e}")
             self.current_screen_frame = None
         
-        if self.current_screen is not None:
-            # Cleanup current screen if it has cleanup method
-            if hasattr(self.current_screen, 'cleanup'):
-                self.current_screen.cleanup()
-            self.current_screen = None
+        # Also destroy any remaining children in content_frame
+        for widget in self.content_frame.winfo_children():
+            try:
+                widget.destroy()
+            except Exception as e:
+                self.logger.debug(f"Widget destroy error: {e}")
     
     def show_main_menu(self):
         """Create main menu with 4 buttons"""
@@ -247,6 +261,9 @@ class MainWindow:
             self.show_main_menu,
             self.update_status
         )
+        # Track the frame for proper cleanup
+        if hasattr(self.current_screen, 'frame'):
+            self.current_screen_frame = self.current_screen.frame
     
     def show_return_screen(self):
         """Switch to return interface"""
@@ -260,6 +277,9 @@ class MainWindow:
             self.show_main_menu,
             self.update_status
         )
+        # Track the frame for proper cleanup
+        if hasattr(self.current_screen, 'frame'):
+            self.current_screen_frame = self.current_screen.frame
     
     def show_settings_screen(self):
         """Switch to calibration/settings interface"""
@@ -269,9 +289,13 @@ class MainWindow:
             self.content_frame,
             self.robot,
             self.positions,
+            self.vision,
             self.show_main_menu,
             self.update_status
         )
+        # Track the frame for proper cleanup
+        if hasattr(self.current_screen, 'frame'):
+            self.current_screen_frame = self.current_screen.frame
     
     def show_test_screen(self):
         """Switch to test operations interface"""
@@ -284,6 +308,9 @@ class MainWindow:
             self.show_main_menu,
             self.update_status
         )
+        # Track the frame for proper cleanup
+        if hasattr(self.current_screen, 'frame'):
+            self.current_screen_frame = self.current_screen.frame
     
     def emergency_stop(self):
         """Handle emergency stop button"""

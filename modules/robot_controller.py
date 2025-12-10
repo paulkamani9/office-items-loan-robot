@@ -133,10 +133,14 @@ class RobotController:
         
         angle = self.position_manager.get_position('gripper_open')
         if angle is None:
-            return False
+            angle = 131  # Default fallback
+            self.logger.warning("Using default gripper_open angle: 131")
         
         try:
+            # Use individual servo control for gripper (servo 6)
+            self.logger.debug(f"Opening gripper to angle: {angle}")
             self.arm.Arm_serial_servo_write(6, angle, 500)
+            self.current_angles[5] = angle  # Update servo 6 (index 5)
             time.sleep(0.6)
             self.logger.debug("Gripper opened")
             return True
@@ -151,15 +155,38 @@ class RobotController:
         
         angle = self.position_manager.get_position('gripper_closed')
         if angle is None:
-            return False
+            angle = 15  # Default fallback
+            self.logger.warning("Using default gripper_closed angle: 15")
         
         try:
+            # Use individual servo control for gripper (servo 6)
+            self.logger.debug(f"Closing gripper to angle: {angle}")
             self.arm.Arm_serial_servo_write(6, angle, 500)
+            self.current_angles[5] = angle  # Update servo 6 (index 5)
             time.sleep(0.6)
             self.logger.debug("Gripper closed")
             return True
         except Exception as e:
             self.logger.error(f"Failed to close gripper: {e}")
+            return False
+    
+    def move_wrist(self, angle: int, speed: int = 500) -> bool:
+        """Move wrist (servo 5) to specific angle (0-270)"""
+        if not self.is_connected():
+            return False
+        
+        if angle < 0 or angle > 270:
+            self.logger.error(f"Wrist angle out of range (0-270): {angle}")
+            return False
+        
+        try:
+            self.logger.debug(f"Moving wrist to angle: {angle}")
+            self.arm.Arm_serial_servo_write(5, angle, speed)
+            self.current_angles[4] = angle  # Update servo 5 (index 4)
+            time.sleep(speed / 1000.0 + 0.1)
+            return True
+        except Exception as e:
+            self.logger.error(f"Failed to move wrist: {e}")
             return False
     
     def get_current_angles(self) -> List[int]:
@@ -175,38 +202,44 @@ class RobotController:
                              status_callback: Optional[Callable] = None) -> bool:
         """
         Complete pick sequence:
-        1. Move to pickup position
-        2. Open gripper
+        1. Open gripper first
+        2. Move to pickup position
         3. Wait briefly
         4. Close gripper
-        5. Lift slightly
+        5. Move to travel position (safe height for movement)
         """
         if status_callback:
             status_callback(f"Picking from {from_position}...")
+        
+        # Open gripper before approaching
+        if not self.open_gripper():
+            self.logger.warning("Failed to open gripper, continuing anyway")
         
         # Move to position
         if not self.move_to_position(from_position, SPEED_NORMAL):
             return False
         
-        # Open gripper
-        if not self.open_gripper():
-            return False
-        
         # Wait for stability
-        time.sleep(0.5)
+        time.sleep(0.3)
         
         # Close gripper
         if not self.close_gripper():
             return False
         
         # Wait for grip
-        time.sleep(0.5)
+        time.sleep(0.3)
         
-        # Lift slightly (move up on joint 2)
-        lifted_angles = self.current_angles.copy()
-        lifted_angles[1] = max(0, lifted_angles[1] - 10)  # Lift 10 degrees
-        if not self.move_to_joint_angles(lifted_angles, SPEED_SLOW):
-            return False
+        # Move to travel position (safe height for carrying item)
+        if status_callback:
+            status_callback("Moving to travel position...")
+        
+        if not self.move_to_position('travel_position', SPEED_NORMAL):
+            # Fallback: lift slightly if travel position fails
+            self.logger.warning("Travel position not available, lifting manually")
+            lifted_angles = self.current_angles.copy()
+            lifted_angles[1] = max(0, lifted_angles[1] - 10)  # Lift 10 degrees
+            if not self.move_to_joint_angles(lifted_angles, SPEED_SLOW):
+                return False
         
         self.logger.info(f"Pick sequence completed from {from_position}")
         return True
@@ -215,30 +248,37 @@ class RobotController:
                               status_callback: Optional[Callable] = None) -> bool:
         """
         Complete place sequence:
-        1. Move to place position
-        2. Open gripper
-        3. Wait briefly
-        4. Lift to safe height
+        1. Move to travel position first (if not already there)
+        2. Move to place position
+        3. Open gripper
+        4. Wait briefly
+        5. Move back to travel position
         """
         if status_callback:
             status_callback(f"Placing at {to_position}...")
         
-        # Move to position
+        # Ensure we're at travel position first for safe approach
+        if not self.move_to_position('travel_position', SPEED_NORMAL):
+            self.logger.warning("Could not move to travel position first")
+        
+        # Move to target position
         if not self.move_to_position(to_position, SPEED_NORMAL):
             return False
         
-        # Open gripper
+        # Open gripper to release item
         if not self.open_gripper():
             return False
         
         # Wait for release
-        time.sleep(0.5)
+        time.sleep(0.3)
         
-        # Lift slightly
-        lifted_angles = self.current_angles.copy()
-        lifted_angles[1] = max(0, lifted_angles[1] - 10)
-        if not self.move_to_joint_angles(lifted_angles, SPEED_SLOW):
-            return False
+        # Move back to travel position for safe retreat
+        if not self.move_to_position('travel_position', SPEED_NORMAL):
+            # Fallback: lift slightly
+            lifted_angles = self.current_angles.copy()
+            lifted_angles[1] = max(0, lifted_angles[1] - 10)
+            if not self.move_to_joint_angles(lifted_angles, SPEED_SLOW):
+                return False
         
         self.logger.info(f"Place sequence completed at {to_position}")
         return True
@@ -327,12 +367,14 @@ class RobotController:
             if not self.execute_place_sequence(storage_pos, status_callback):
                 raise Exception(f"Failed to place at {storage_pos}")
             
-            # Step 3: Return home
+            # Step 3: Return to observation position for next item
             if status_callback:
-                status_callback("Returning home...")
+                status_callback("Returning to observation position...")
             
-            if not self.move_home():
-                raise Exception("Failed to return home")
+            if not self.move_to_observation_position(status_callback):
+                # Fallback to home if observation position fails
+                self.logger.warning("Could not move to observation position, going home")
+                self.move_home()
             
             if status_callback:
                 status_callback(f"✓ {item_name} returned successfully!")
@@ -343,9 +385,10 @@ class RobotController:
         except Exception as e:
             self.logger.error(f"Return failed: {e}")
             
-            # Recovery: Try to return home safely
+            # Recovery: Try to return to observation position or home safely
             try:
-                self.move_home()
+                if not self.move_to_observation_position():
+                    self.move_home()
             except:
                 pass
             
@@ -353,21 +396,38 @@ class RobotController:
     
     def move_to_observation_position(self, status_callback: Optional[Callable] = None) -> bool:
         """
-        Move to observation position (above drop zone for return mode)
+        Move to observation position (camera view for classification in return mode)
+        Uses the calibrated observation_position from positions.json
         """
         if status_callback:
             status_callback("Moving to observation position...")
         
-        # Use drop zone position but lift higher
+        # Try to use calibrated observation position first
+        observation_angles = self.position_manager.get_position('observation_position')
+        
+        if observation_angles is not None:
+            return self.move_to_joint_angles(observation_angles, SPEED_NORMAL)
+        
+        # Fallback: Use drop zone position but lift higher
+        self.logger.warning("observation_position not found, using fallback")
         drop_zone_angles = self.position_manager.get_position('drop_zone')
         if drop_zone_angles is None:
             return False
         
         # Lift camera higher for better view
-        observation_angles = drop_zone_angles.copy()
-        observation_angles[1] = max(0, observation_angles[1] - 15)
+        fallback_angles = drop_zone_angles.copy()
+        fallback_angles[1] = max(0, fallback_angles[1] - 15)
         
-        return self.move_to_joint_angles(observation_angles, SPEED_NORMAL)
+        return self.move_to_joint_angles(fallback_angles, SPEED_NORMAL)
+    
+    def move_to_travel_position(self, status_callback: Optional[Callable] = None) -> bool:
+        """
+        Move to travel position (safe height for carrying items between positions)
+        """
+        if status_callback:
+            status_callback("Moving to travel position...")
+        
+        return self.move_to_position('travel_position', SPEED_NORMAL)
     
     def emergency_stop(self):
         """

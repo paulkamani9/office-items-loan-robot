@@ -15,7 +15,7 @@ SPEED_SLOW = 500
 SPEED_FAST = 1500
 
 # Camera Settings
-CAMERA_ID = 0
+CAMERA_ID = 1
 CAMERA_WIDTH = 416  # Match model training size
 CAMERA_HEIGHT = 416
 CROP_PERCENTAGE = 0.70
@@ -29,6 +29,24 @@ ITEM_CLASSES = [
     'Mobile Phone',
     'Pen'
 ]
+
+# Mapping from model class names to display names
+# Model may return names like 'pen', 'computer_keyboard' etc.
+CLASS_NAME_MAPPING = {
+    'office_chair': 'Chair',
+    'computer_keyboard': 'Computer Keyboard',
+    'computer_mouse': 'Computer Mouse',
+    'headphones': 'Headphones',
+    'mobile_phone': 'Mobile Phone',
+    'pen': 'Pen',
+    # Also support already formatted names
+    'Office Chair': 'Chair',
+    'Computer Keyboard': 'Computer Keyboard',
+    'Computer Mouse': 'Computer Mouse',
+    'Headphones': 'Headphones',
+    'Mobile Phone': 'Mobile Phone',
+    'Pen': 'Pen'
+}
 
 # GUI Settings
 WINDOW_WIDTH = 1024
@@ -52,6 +70,8 @@ DEFAULT_GRIPPER_CLOSED = 135
 POSITION_NAMES = [
     'home',
     'drop_zone',
+    'observation_position',
+    'travel_position',
     'chair_storage',
     'keyboard_storage',
     'mouse_storage',

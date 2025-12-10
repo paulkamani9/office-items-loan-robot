@@ -1,10 +1,12 @@
 """
-Calibration screen for position setup
+Calibration screen for position setup with live camera feed
 """
 
 import tkinter as tk
 from tkinter import ttk, messagebox
 import threading
+import cv2
+from PIL import Image, ImageTk
 import sys
 from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent))
@@ -25,15 +27,16 @@ from utils.logger import RobotLogger
 
 class CalibrationScreen:
     """
-    Visual position calibration with sliders
+    Visual position calibration with sliders and live camera feed
     """
     
-    def __init__(self, parent, robot_controller, position_manager, back_callback, status_callback):
+    def __init__(self, parent, robot_controller, position_manager, vision_system, back_callback, status_callback):
         """Initialize calibration interface"""
         self.logger = RobotLogger()
         self.parent = parent
         self.robot = robot_controller
         self.positions = position_manager
+        self.vision = vision_system
         self.back_callback = back_callback
         self.status_callback = status_callback
         
@@ -43,20 +46,21 @@ class CalibrationScreen:
         self.sliders = []
         self.gripper_sliders = {}
         self.selected_position = tk.StringVar(value='home')
+        self.camera_active = False
         
         self.create_ui()
         self.load_position_to_sliders('home')
     
     def create_ui(self):
-        """Create calibration screen UI"""
+        """Create calibration screen UI with camera panel"""
         # Header
         header = tk.Frame(self.frame, bg=THEME_COLOR_PRIMARY)
-        header.pack(fill=tk.X, pady=(0, 20))
+        header.pack(fill=tk.X, pady=(0, 10))
         
         back_btn = tk.Button(
             header,
             text="← Back",
-            command=self.back_callback,
+            command=self.handle_back,
             font=('Arial', 12),
             bg=THEME_COLOR_SECONDARY,
             fg=THEME_COLOR_TEXT_LIGHT,
@@ -76,18 +80,22 @@ class CalibrationScreen:
         )
         title.pack(side=tk.LEFT, padx=20)
         
-        # Content area
-        content = tk.Frame(self.frame, bg=THEME_COLOR_PRIMARY)
-        content.pack(fill=tk.BOTH, expand=True, padx=20)
+        # Main content area - split into left (controls) and right (camera)
+        main_content = tk.Frame(self.frame, bg=THEME_COLOR_PRIMARY)
+        main_content.pack(fill=tk.BOTH, expand=True, padx=10)
+        
+        # Left side - Controls
+        left_frame = tk.Frame(main_content, bg=THEME_COLOR_PRIMARY)
+        left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 10))
         
         # Position selector
-        selector_frame = tk.Frame(content, bg=THEME_COLOR_PRIMARY)
-        selector_frame.pack(fill=tk.X, pady=(0, 20))
+        selector_frame = tk.Frame(left_frame, bg=THEME_COLOR_PRIMARY)
+        selector_frame.pack(fill=tk.X, pady=(0, 10))
         
         tk.Label(
             selector_frame,
             text="Select Position:",
-            font=('Arial', 14, 'bold'),
+            font=('Arial', 12, 'bold'),
             bg=THEME_COLOR_PRIMARY,
             fg=THEME_COLOR_TEXT_LIGHT
         ).pack(side=tk.LEFT, padx=(0, 10))
@@ -97,8 +105,8 @@ class CalibrationScreen:
             textvariable=self.selected_position,
             values=POSITION_NAMES,
             state='readonly',
-            font=('Arial', 12),
-            width=25
+            font=('Arial', 11),
+            width=20
         )
         position_dropdown.pack(side=tk.LEFT)
         position_dropdown.bind('<<ComboboxSelected>>', self.on_position_changed)
@@ -107,92 +115,158 @@ class CalibrationScreen:
             selector_frame,
             text="Test Position",
             command=self.test_position,
-            font=('Arial', 12, 'bold'),
+            font=('Arial', 11, 'bold'),
             bg=THEME_COLOR_ACCENT,
             fg=THEME_COLOR_TEXT_LIGHT,
             relief='flat',
-            padx=20,
-            pady=8,
+            padx=15,
+            pady=5,
             cursor='hand2'
         )
         test_btn.pack(side=tk.RIGHT)
         
         # Sliders container
-        sliders_frame = tk.Frame(content, bg=THEME_COLOR_SECONDARY, relief='raised', bd=2)
-        sliders_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 20))
+        sliders_frame = tk.Frame(left_frame, bg=THEME_COLOR_SECONDARY, relief='raised', bd=2)
+        sliders_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
         
         # Joint sliders
         joints_label = tk.Label(
             sliders_frame,
             text="Joint Angles",
-            font=('Arial', 14, 'bold'),
+            font=('Arial', 12, 'bold'),
             bg=THEME_COLOR_SECONDARY,
             fg=THEME_COLOR_TEXT_LIGHT
         )
-        joints_label.pack(pady=15)
+        joints_label.pack(pady=10)
         
         self.create_sliders(sliders_frame)
         
         # Gripper sliders
         gripper_frame = tk.Frame(sliders_frame, bg=THEME_COLOR_SECONDARY)
-        gripper_frame.pack(fill=tk.X, padx=20, pady=10)
+        gripper_frame.pack(fill=tk.X, padx=10, pady=5)
         
         gripper_label = tk.Label(
             gripper_frame,
             text="Gripper Positions",
-            font=('Arial', 12, 'bold'),
+            font=('Arial', 11, 'bold'),
             bg=THEME_COLOR_SECONDARY,
             fg=THEME_COLOR_TEXT_LIGHT
         )
-        gripper_label.pack(pady=10)
+        gripper_label.pack(pady=5)
         
         self.create_gripper_sliders(gripper_frame)
         
         # Buttons
-        button_frame = tk.Frame(content, bg=THEME_COLOR_PRIMARY)
+        button_frame = tk.Frame(left_frame, bg=THEME_COLOR_PRIMARY)
         button_frame.pack(fill=tk.X)
         
         update_btn = tk.Button(
             button_frame,
             text="Update Position",
             command=self.update_position,
-            font=('Arial', 12, 'bold'),
+            font=('Arial', 11, 'bold'),
             bg=THEME_COLOR_SUCCESS,
             fg=THEME_COLOR_TEXT_LIGHT,
             relief='flat',
-            padx=20,
-            pady=10,
+            padx=15,
+            pady=8,
             cursor='hand2'
         )
-        update_btn.pack(side=tk.LEFT, padx=5)
+        update_btn.pack(side=tk.LEFT, padx=3)
         
         save_btn = tk.Button(
             button_frame,
-            text="Save All Positions",
+            text="Save All",
             command=self.save_all_positions,
-            font=('Arial', 12, 'bold'),
+            font=('Arial', 11, 'bold'),
             bg=THEME_COLOR_ACCENT,
             fg=THEME_COLOR_TEXT_LIGHT,
             relief='flat',
-            padx=20,
-            pady=10,
+            padx=15,
+            pady=8,
             cursor='hand2'
         )
-        save_btn.pack(side=tk.LEFT, padx=5)
+        save_btn.pack(side=tk.LEFT, padx=3)
         
         reset_btn = tk.Button(
             button_frame,
             text="Reset All",
             command=self.reset_to_defaults,
-            font=('Arial', 12, 'bold'),
+            font=('Arial', 11, 'bold'),
             bg=THEME_COLOR_WARNING,
             fg=THEME_COLOR_TEXT_LIGHT,
             relief='flat',
-            padx=20,
-            pady=10,
+            padx=15,
+            pady=8,
             cursor='hand2'
         )
-        reset_btn.pack(side=tk.LEFT, padx=5)
+        reset_btn.pack(side=tk.LEFT, padx=3)
+        
+        # Right side - Camera
+        right_frame = tk.Frame(main_content, bg=THEME_COLOR_SECONDARY, relief='raised', bd=2, width=350)
+        right_frame.pack(side=tk.RIGHT, fill=tk.Y)
+        right_frame.pack_propagate(False)
+        
+        camera_title = tk.Label(
+            right_frame,
+            text="Live Camera Feed",
+            font=('Arial', 12, 'bold'),
+            bg=THEME_COLOR_SECONDARY,
+            fg=THEME_COLOR_TEXT_LIGHT
+        )
+        camera_title.pack(pady=10)
+        
+        # Camera display container with fixed size
+        camera_container = tk.Frame(right_frame, bg='black', width=320, height=240)
+        camera_container.pack(padx=10, pady=5)
+        camera_container.pack_propagate(False)  # Prevent resizing
+        
+        # Camera display label inside container
+        self.camera_display = tk.Label(
+            camera_container,
+            bg='black'
+        )
+        self.camera_display.pack(fill=tk.BOTH, expand=True)
+        
+        # Store the target size for camera updates
+        self.camera_width = 320
+        self.camera_height = 240
+        
+        # Camera status
+        self.camera_status = tk.Label(
+            right_frame,
+            text="Camera: Off",
+            font=('Arial', 10),
+            bg=THEME_COLOR_SECONDARY,
+            fg='#95A5A6'
+        )
+        self.camera_status.pack(pady=5)
+        
+        # Camera toggle button
+        self.camera_btn = tk.Button(
+            right_frame,
+            text="Start Camera",
+            command=self.toggle_camera,
+            font=('Arial', 11, 'bold'),
+            bg=THEME_COLOR_SUCCESS,
+            fg=THEME_COLOR_TEXT_LIGHT,
+            relief='flat',
+            padx=20,
+            pady=8,
+            cursor='hand2'
+        )
+        self.camera_btn.pack(pady=10)
+        
+        # Helpful hint
+        hint_label = tk.Label(
+            right_frame,
+            text="Use camera to help calibrate\nobservation_position for\naccurate item detection",
+            font=('Arial', 9),
+            bg=THEME_COLOR_SECONDARY,
+            fg='#95A5A6',
+            justify=tk.CENTER
+        )
+        hint_label.pack(pady=10)
     
     def create_sliders(self, parent):
         """Create 6 joint sliders"""
@@ -387,6 +461,72 @@ class CalibrationScreen:
             self.load_position_to_sliders(self.selected_position.get())
             messagebox.showinfo("Reset", "All positions reset to defaults")
     
+    def handle_back(self):
+        """Handle back button - cleanup and return to main menu"""
+        self.cleanup()
+        self.back_callback()
+    
+    def toggle_camera(self):
+        """Toggle camera feed on/off"""
+        if self.camera_active:
+            self.stop_camera()
+        else:
+            self.start_camera()
+    
+    def start_camera(self):
+        """Start live camera feed"""
+        if self.vision is None:
+            messagebox.showerror("Error", "Vision system not available")
+            return
+        
+        self.camera_active = True
+        self.camera_btn.config(text="Stop Camera", bg='#E74C3C')
+        self.camera_status.config(text="Camera: Active", fg=THEME_COLOR_SUCCESS)
+        self.update_camera_feed()
+        self.logger.info("Camera feed started")
+    
+    def stop_camera(self):
+        """Stop live camera feed"""
+        self.camera_active = False
+        self.camera_btn.config(text="Start Camera", bg=THEME_COLOR_SUCCESS)
+        self.camera_status.config(text="Camera: Off", fg='#95A5A6')
+        
+        # Clear camera display
+        self.camera_display.config(image='')
+        self.logger.info("Camera feed stopped")
+    
+    def update_camera_feed(self):
+        """Update camera display with current frame"""
+        if not self.camera_active:
+            return
+        
+        try:
+            frame = self.vision.get_live_feed()
+            if frame is not None:
+                # Convert BGR to RGB
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                
+                # Convert to PIL Image
+                pil_image = Image.fromarray(frame_rgb)
+                
+                # Resize to exact display size (maintains aspect ratio within bounds)
+                pil_image = pil_image.resize((self.camera_width, self.camera_height), Image.Resampling.LANCZOS)
+                
+                # Convert to PhotoImage
+                photo = ImageTk.PhotoImage(pil_image)
+                
+                # Update label
+                self.camera_display.config(image=photo)
+                self.camera_display.image = photo  # Keep reference
+        
+        except Exception as e:
+            self.logger.debug(f"Camera feed update error: {e}")
+        
+        # Schedule next update (~30 FPS)
+        if self.camera_active:
+            self.parent.after(33, self.update_camera_feed)
+    
     def cleanup(self):
         """Cleanup when leaving screen"""
-        pass
+        self.logger.info("Cleaning up calibration screen")
+        self.stop_camera()

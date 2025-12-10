@@ -50,6 +50,7 @@ class ReturnScreen:
         self.return_mode_active = False
         self.detection_thread = None
         self.operation_in_progress = False
+        self.is_active = True  # Flag to track if screen is still active
         
         self.create_ui()
         
@@ -195,25 +196,39 @@ class ReturnScreen:
         
         # Move robot to observation position
         def move_robot():
-            self.status_message.config(text="Moving to observation position...")
+            if not self.is_active:
+                return
+            
+            try:
+                self.status_message.config(text="Moving to observation position...")
+            except tk.TclError:
+                return  # Widget destroyed
+            
             if self.robot.move_to_observation_position(self.status_callback):
                 # Wait initial period
                 for i in range(int(INITIAL_WAIT_BEFORE_DETECTION)):
+                    if not self.is_active:
+                        return
                     remaining = int(INITIAL_WAIT_BEFORE_DETECTION) - i
-                    self.parent.after(0, lambda r=remaining: self.status_message.config(
-                        text=f"Please place item in drop zone...\n\nStarting detection in {r}s"
-                    ))
+                    try:
+                        self.parent.after(0, lambda r=remaining: self.status_message.config(
+                            text=f"Please place item in drop zone...\n\nStarting detection in {r}s"
+                        ) if self.is_active else None)
+                    except tk.TclError:
+                        return
                     time.sleep(1)
                 
-                # Start detection
-                self.return_mode_active = True
-                self.parent.after(0, self.start_detection_thread)
+                # Start detection only if still active
+                if self.is_active:
+                    self.return_mode_active = True
+                    self.parent.after(0, self.start_detection_thread)
             else:
-                self.parent.after(0, lambda: messagebox.showerror(
-                    "Error",
-                    "Failed to move robot to observation position"
-                ))
-                self.parent.after(0, self.handle_back)
+                if self.is_active:
+                    self.parent.after(0, lambda: messagebox.showerror(
+                        "Error",
+                        "Failed to move robot to observation position"
+                    ))
+                    self.parent.after(0, self.handle_back)
         
         thread = threading.Thread(target=move_robot, daemon=True)
         thread.start()
@@ -235,17 +250,24 @@ class ReturnScreen:
         detection_count = 0
         last_detected_item = None
         
-        while self.return_mode_active:
+        while self.return_mode_active and self.is_active:
             try:
                 if self.operation_in_progress:
                     time.sleep(1)
                     continue
                 
+                if not self.is_active:
+                    break
+                
                 # Capture and classify
                 result = self.vision.classify_item()
                 
-                # Update GUI
-                self.parent.after(0, lambda r=result: self.update_detection_status(r))
+                # Update GUI only if still active
+                if self.is_active:
+                    try:
+                        self.parent.after(0, lambda r=result: self.update_detection_status(r) if self.is_active else None)
+                    except tk.TclError:
+                        break
                 
                 # Check if valid detection
                 if result.get('success', False):
@@ -270,7 +292,7 @@ class ReturnScreen:
                         last_detected_item = None
                         
                         # Wait for return to complete
-                        while self.operation_in_progress and self.return_mode_active:
+                        while self.operation_in_progress and self.return_mode_active and self.is_active:
                             time.sleep(0.5)
                 
                 else:
@@ -283,11 +305,13 @@ class ReturnScreen:
                 
             except Exception as e:
                 self.logger.error(f"Detection loop error: {e}")
+                if not self.is_active:
+                    break
                 time.sleep(1)
     
     def update_camera_feed(self):
         """Update camera display"""
-        if not self.return_mode_active:
+        if not self.return_mode_active or not self.is_active:
             return
         
         try:
@@ -310,56 +334,65 @@ class ReturnScreen:
         except Exception as e:
             self.logger.debug(f"Camera feed update error: {e}")
         
-        # Schedule next update (30 FPS)
-        if self.return_mode_active:
-            self.parent.after(33, self.update_camera_feed)
+        # Schedule next update (30 FPS) only if still active
+        if self.return_mode_active and self.is_active:
+            try:
+                self.parent.after(33, self.update_camera_feed)
+            except tk.TclError:
+                pass  # Widget destroyed
     
     def update_detection_status(self, result: dict):
         """Update detection panel with classification results"""
-        if result.get('success', False):
-            # Valid detection
-            self.status_message.config(text="Item detected!", fg=THEME_COLOR_SUCCESS)
-            self.detected_label.config(
-                text=f"Detected:\n{result['class_name']}",
-                fg=THEME_COLOR_SUCCESS
-            )
-            self.confidence_label.config(
-                text=f"Confidence: {result['confidence']:.1%}"
-            )
-            self.validation_label.config(
-                text="✓ Valid item",
-                fg=THEME_COLOR_SUCCESS
-            )
-        elif 'error' in result:
-            # Error or invalid
-            self.status_message.config(text="Waiting for item...", fg=THEME_COLOR_TEXT_LIGHT)
-            
-            if result.get('class_name'):
+        if not self.is_active:
+            return
+        
+        try:
+            if result.get('success', False):
+                # Valid detection
+                self.status_message.config(text="Item detected!", fg=THEME_COLOR_SUCCESS)
                 self.detected_label.config(
                     text=f"Detected:\n{result['class_name']}",
-                    fg=THEME_COLOR_WARNING
+                    fg=THEME_COLOR_SUCCESS
                 )
                 self.confidence_label.config(
-                    text=f"Confidence: {result.get('confidence', 0):.1%}"
+                    text=f"Confidence: {result['confidence']:.1%}"
                 )
                 self.validation_label.config(
-                    text=f"✗ {result['error']}",
-                    fg=THEME_COLOR_DANGER
+                    text="✓ Valid item",
+                    fg=THEME_COLOR_SUCCESS
                 )
+            elif 'error' in result:
+                # Error or invalid
+                self.status_message.config(text="Waiting for item...", fg=THEME_COLOR_TEXT_LIGHT)
+                
+                if result.get('class_name'):
+                    self.detected_label.config(
+                        text=f"Detected:\n{result['class_name']}",
+                        fg=THEME_COLOR_WARNING
+                    )
+                    self.confidence_label.config(
+                        text=f"Confidence: {result.get('confidence', 0):.1%}"
+                    )
+                    self.validation_label.config(
+                        text=f"✗ {result['error']}",
+                        fg=THEME_COLOR_DANGER
+                    )
+                else:
+                    self.detected_label.config(text="")
+                    self.confidence_label.config(text="")
+                    self.validation_label.config(text="Place item in view")
             else:
+                # Waiting
+                self.status_message.config(text="Waiting for item...", fg=THEME_COLOR_TEXT_LIGHT)
                 self.detected_label.config(text="")
                 self.confidence_label.config(text="")
-                self.validation_label.config(text="Place item in view")
-        else:
-            # Waiting
-            self.status_message.config(text="Waiting for item...", fg=THEME_COLOR_TEXT_LIGHT)
-            self.detected_label.config(text="")
-            self.confidence_label.config(text="")
-            self.validation_label.config(text="")
+                self.validation_label.config(text="")
+        except tk.TclError:
+            pass  # Widget destroyed
     
     def execute_return_sequence(self, item_name: str):
         """Execute return operation after valid detection"""
-        if self.operation_in_progress:
+        if self.operation_in_progress or not self.is_active:
             return
         
         self.operation_in_progress = True
@@ -369,25 +402,42 @@ class ReturnScreen:
         
         def return_thread():
             # Safety wait
-            time.sleep(SAFETY_WAIT_AFTER_DETECTION)
+            for _ in range(int(SAFETY_WAIT_AFTER_DETECTION * 10)):
+                if not self.is_active:
+                    return
+                time.sleep(0.1)
+            
+            if not self.is_active:
+                return
             
             # Show progress
-            self.parent.after(0, lambda: self.progress_label.config(text="Returning item..."))
-            self.parent.after(0, self.progress_bar.start)
+            try:
+                self.parent.after(0, lambda: self.progress_label.config(text="Returning item...") if self.is_active else None)
+                self.parent.after(0, lambda: self.progress_bar.start() if self.is_active else None)
+            except tk.TclError:
+                return
             
             # Execute return
             result = self.robot.return_item(item_name, status_callback=self.status_callback)
             
-            # Complete
-            self.parent.after(0, lambda: self._return_complete(item_name, result))
+            # Complete only if still active
+            if self.is_active:
+                self.parent.after(0, lambda: self._return_complete(item_name, result))
         
         thread = threading.Thread(target=return_thread, daemon=True)
         thread.start()
     
     def _return_complete(self, item_name: str, result: dict):
         """Handle return completion"""
-        self.progress_bar.stop()
-        self.progress_label.config(text="")
+        if not self.is_active:
+            return
+        
+        try:
+            self.progress_bar.stop()
+            self.progress_label.config(text="")
+        except tk.TclError:
+            pass
+        
         self.operation_in_progress = False
         
         if result.get('success', False):
@@ -395,13 +445,16 @@ class ReturnScreen:
             self.state.mark_available(item_name)
             
             # Show success
-            self.status_message.config(
-                text=f"✓ {item_name} returned successfully!\n\nWaiting for next item...",
-                fg=THEME_COLOR_SUCCESS
-            )
-            self.detected_label.config(text="")
-            self.confidence_label.config(text="")
-            self.validation_label.config(text="")
+            try:
+                self.status_message.config(
+                    text=f"✓ {item_name} returned successfully!\n\nWaiting for next item...",
+                    fg=THEME_COLOR_SUCCESS
+                )
+                self.detected_label.config(text="")
+                self.confidence_label.config(text="")
+                self.validation_label.config(text="")
+            except tk.TclError:
+                pass
             
             messagebox.showinfo(
                 "Return Complete",
@@ -410,10 +463,13 @@ class ReturnScreen:
         else:
             # Show error
             error_msg = result.get('message', 'Unknown error')
-            self.status_message.config(
-                text=f"Error returning item\n\n{error_msg}",
-                fg=THEME_COLOR_DANGER
-            )
+            try:
+                self.status_message.config(
+                    text=f"Error returning item\n\n{error_msg}",
+                    fg=THEME_COLOR_DANGER
+                )
+            except tk.TclError:
+                pass
             
             messagebox.showerror(
                 "Return Failed",
@@ -423,24 +479,38 @@ class ReturnScreen:
     def stop_return_mode(self):
         """Exit return mode"""
         self.logger.info("Stopping return mode")
+        self.is_active = False
         self.return_mode_active = False
+        self.operation_in_progress = False
         
-        # Wait for thread to stop
+        # Wait for thread to stop (with timeout)
         if self.detection_thread and self.detection_thread.is_alive():
-            self.detection_thread.join(timeout=2)
+            self.detection_thread.join(timeout=1)
         
-        # Move robot home
+        # Move robot home in background
         def move_home():
-            self.robot.move_home()
+            try:
+                self.robot.move_home()
+            except Exception as e:
+                self.logger.debug(f"Error moving home: {e}")
         
         thread = threading.Thread(target=move_home, daemon=True)
         thread.start()
     
     def handle_back(self):
         """Handle back button"""
-        self.stop_return_mode()
+        if self.operation_in_progress:
+            result = messagebox.askyesno(
+                "Operation in Progress",
+                "A return operation is in progress. Are you sure you want to go back?\n\nThe robot will stop and return home."
+            )
+            if not result:
+                return
+        
+        self.cleanup()
         self.back_callback()
     
     def cleanup(self):
         """Cleanup when leaving screen"""
+        self.logger.info("Cleaning up return screen")
         self.stop_return_mode()

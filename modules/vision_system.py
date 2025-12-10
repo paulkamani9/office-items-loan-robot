@@ -17,7 +17,8 @@ from config.settings import (
     CAMERA_HEIGHT,
     CROP_PERCENTAGE,
     CONFIDENCE_THRESHOLD,
-    ITEM_CLASSES
+    ITEM_CLASSES,
+    CLASS_NAME_MAPPING
 )
 from utils.logger import RobotLogger
 
@@ -95,6 +96,32 @@ class VisionSystem:
             self.logger.error(f"Error detecting model input size: {e}")
             return 416  # Safe default
     
+    def normalize_class_name(self, raw_name: str) -> str:
+        """
+        Normalize model class name to match ITEM_CLASSES format
+        
+        Examples:
+            'pen' -> 'Pen'
+            'computer_keyboard' -> 'Computer Keyboard'
+            'mobile_phone' -> 'Mobile Phone'
+        
+        Args:
+            raw_name: Class name as returned by the model
+        
+        Returns:
+            Normalized class name matching ITEM_CLASSES format
+        """
+        # First check if there's an explicit mapping
+        if raw_name in CLASS_NAME_MAPPING:
+            return CLASS_NAME_MAPPING[raw_name]
+        
+        # Fallback: Convert underscore format to title case with spaces
+        # 'computer_keyboard' -> 'Computer Keyboard'
+        normalized = raw_name.replace('_', ' ').title()
+        
+        self.logger.debug(f"Class name normalized: '{raw_name}' -> '{normalized}'")
+        return normalized
+    
     def initialize_camera(self) -> bool:
         """
         Setup camera with optimal settings for RPi4
@@ -105,8 +132,15 @@ class VisionSystem:
         """
         try:
             self.logger.info(f"Initializing camera {self.camera_id}")
-            self.camera = cv2.VideoCapture(self.camera_id)
             
+            # Try with CAP_V4L2 backend first (more reliable on Linux)
+            self.camera = cv2.VideoCapture(self.camera_id, cv2.CAP_V4L2)
+            
+            if not self.camera.isOpened():
+                self.logger.warning("Failed with V4L2, trying default backend...")
+                # Fallback to default backend
+                self.camera = cv2.VideoCapture(self.camera_id)
+                
             if not self.camera.isOpened():
                 self.logger.error("Failed to open camera")
                 return False
@@ -115,19 +149,37 @@ class VisionSystem:
             self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, CAMERA_WIDTH)
             self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_HEIGHT)
             
-            # Set MJPEG for better performance on RPi4
-            self.camera.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+            # Try to set MJPEG for better performance (ignore if fails)
+            try:
+                self.camera.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+            except:
+                self.logger.debug("MJPEG format not supported, using default")
             
-            # Disable auto settings for consistent images
-            self.camera.set(cv2.CAP_PROP_AUTOFOCUS, 0)
-            self.camera.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)  # Manual mode
+            # Try to disable auto settings (ignore if not supported)
+            try:
+                self.camera.set(cv2.CAP_PROP_AUTOFOCUS, 0)
+            except:
+                pass
+            
+            try:
+                self.camera.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)
+            except:
+                pass
             
             # Warm-up camera (capture and discard frames)
             self.logger.debug("Warming up camera...")
             for _ in range(10):
-                self.camera.read()
+                ret, _ = self.camera.read()
+                if not ret:
+                    self.logger.warning(f"Warm-up frame failed, continuing...")
             
-            self.logger.info("✓ Camera initialized successfully")
+            # Verify camera is working by reading one frame
+            ret, test_frame = self.camera.read()
+            if not ret or test_frame is None:
+                self.logger.error("Camera opened but cannot read frames")
+                return False
+            
+            self.logger.info(f"✓ Camera initialized successfully - Frame size: {test_frame.shape}")
             return True
             
         except Exception as e:
@@ -225,15 +277,19 @@ class VisionSystem:
                 top_class_idx = int(probs.top1)
                 confidence = float(probs.top1conf)
                 
-                # Get class name
+                # Get class name from model
                 class_names = result.names
-                predicted_class = class_names[top_class_idx]
+                raw_class_name = class_names[top_class_idx]
                 
-                # Get all predictions for debugging
+                # Normalize class name to match ITEM_CLASSES format
+                predicted_class = self.normalize_class_name(raw_class_name)
+                
+                # Get all predictions for debugging (with normalized names)
                 all_preds = {}
                 if hasattr(probs, 'data'):
                     for idx, prob in enumerate(probs.data):
-                        all_preds[class_names[idx]] = float(prob)
+                        normalized_name = self.normalize_class_name(class_names[idx])
+                        all_preds[normalized_name] = float(prob)
                 
                 # Check confidence threshold
                 if confidence < CONFIDENCE_THRESHOLD:
@@ -252,7 +308,7 @@ class VisionSystem:
                         'class_name': predicted_class,
                         'confidence': confidence,
                         'all_predictions': all_preds,
-                        'error': f'Detected class not in system: {predicted_class}'
+                        'error': f'Detected class not in system: {predicted_class} (raw: {raw_class_name})'
                     }
                 
                 # Success!

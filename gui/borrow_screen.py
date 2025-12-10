@@ -38,6 +38,7 @@ class BorrowScreen:
         self.frame.pack(fill=tk.BOTH, expand=True)
         
         self.operation_in_progress = False
+        self.is_active = True  # Flag to track if screen is still active
         
         self.create_ui()
         self.refresh_item_list()
@@ -51,7 +52,7 @@ class BorrowScreen:
         back_btn = tk.Button(
             header,
             text="← Back",
-            command=self.back_callback,
+            command=self.handle_back,
             font=('Arial', 12),
             bg=THEME_COLOR_SECONDARY,
             fg=THEME_COLOR_TEXT_LIGHT,
@@ -217,11 +218,23 @@ class BorrowScreen:
     def _borrow_thread(self, item_name: str):
         """Background thread for borrow operation"""
         def update_status(msg):
-            self.progress_label.config(text=msg)
+            if self.is_active:
+                try:
+                    self.progress_label.config(text=msg)
+                except tk.TclError:
+                    pass  # Widget may be destroyed
         
         try:
+            # Check if still active before proceeding
+            if not self.is_active:
+                return
+            
             # Execute borrow
             result = self.robot.borrow_item(item_name, status_callback=update_status)
+            
+            # Check if still active before updating UI
+            if not self.is_active:
+                return
             
             if result['success']:
                 # Update state
@@ -237,11 +250,19 @@ class BorrowScreen:
         
         except Exception as e:
             self.logger.error(f"Borrow error: {e}")
-            self.parent.after(0, lambda: self._borrow_complete(item_name, False, str(e)))
+            if self.is_active:
+                self.parent.after(0, lambda: self._borrow_complete(item_name, False, str(e)))
     
     def _borrow_complete(self, item_name: str, success: bool, message: str):
         """Handle borrow completion (runs on main thread)"""
-        self.progress_bar.stop()
+        if not self.is_active:
+            return
+        
+        try:
+            self.progress_bar.stop()
+        except tk.TclError:
+            pass
+        
         self.operation_in_progress = False
         
         if success:
@@ -257,10 +278,29 @@ class BorrowScreen:
             )
             self.status_callback("Error - see logs")
         
-        # Refresh UI
-        self.refresh_item_list()
-        self.progress_label.config(text="")
+        # Refresh UI only if still active
+        if self.is_active:
+            try:
+                self.refresh_item_list()
+                self.progress_label.config(text="")
+            except tk.TclError:
+                pass
+    
+    def handle_back(self):
+        """Handle back button - cleanup and return to main menu"""
+        if self.operation_in_progress:
+            result = messagebox.askyesno(
+                "Operation in Progress",
+                "An operation is in progress. Are you sure you want to go back?\n\nThe robot will continue its current movement."
+            )
+            if not result:
+                return
+        
+        self.cleanup()
+        self.back_callback()
     
     def cleanup(self):
         """Cleanup when leaving screen"""
-        pass
+        self.logger.info("Cleaning up borrow screen")
+        self.is_active = False
+        self.operation_in_progress = False
