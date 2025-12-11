@@ -198,15 +198,74 @@ class RobotController:
         # Return last known angles instead
         return self.current_angles.copy()
     
+    def lift_to_travel_height(self, status_callback: Optional[Callable] = None) -> bool:
+        """
+        Lift arm vertically to travel height from current position.
+        This keeps the base (J1) rotation the same and only adjusts
+        the shoulder/elbow joints (J2, J3, J4) to lift straight up.
+        
+        This prevents sweeping sideways while low which could knock items over.
+        """
+        if not self.is_connected():
+            return False
+        
+        if status_callback:
+            status_callback("Lifting to safe height...")
+        
+        # Get travel position angles for reference (the "safe" joint configuration)
+        travel_angles = self.position_manager.get_position('travel_position')
+        if travel_angles is None:
+            # Fallback: just lift shoulder
+            self.logger.warning("travel_position not found, using fallback lift")
+            lifted_angles = self.current_angles.copy()
+            lifted_angles[1] = max(0, lifted_angles[1] - 20)  # Lift shoulder
+            lifted_angles[2] = min(180, lifted_angles[2] + 10)  # Adjust elbow
+            return self.move_to_joint_angles(lifted_angles, SPEED_NORMAL)
+        
+        # Create dynamic travel position:
+        # Keep current base rotation (J1), but use travel height for J2, J3, J4
+        lifted_angles = self.current_angles.copy()
+        lifted_angles[1] = travel_angles[1]  # Shoulder - use travel height
+        lifted_angles[2] = travel_angles[2]  # Elbow - use travel configuration
+        lifted_angles[3] = travel_angles[3]  # Wrist pitch - use travel configuration
+        # Keep J1 (base), J5 (wrist roll), J6 (gripper) as they are
+        
+        self.logger.debug(f"Lifting from {self.current_angles} to {lifted_angles}")
+        return self.move_to_joint_angles(lifted_angles, SPEED_NORMAL)
+    
+    def move_to_position_keep_gripper(self, position_name: str, speed: int = SPEED_NORMAL) -> bool:
+        """
+        Move robot to named position but keep current gripper angle.
+        This prevents the stored gripper value in positions from overriding
+        the current gripper state.
+        """
+        if not self.is_connected():
+            self.logger.error("Robot not connected")
+            return False
+        
+        # Get position from manager
+        angles = self.position_manager.get_position(position_name)
+        if angles is None:
+            self.logger.error(f"Position not found: {position_name}")
+            return False
+        
+        # Keep current gripper angle (index 5 = servo 6)
+        angles_keep_gripper = angles.copy()
+        angles_keep_gripper[5] = self.current_angles[5]
+        
+        self.logger.info(f"Moving to {position_name} (keeping gripper): {angles_keep_gripper}")
+        return self.move_to_joint_angles(angles_keep_gripper, speed)
+    
     def execute_pick_sequence(self, from_position: str, 
                              status_callback: Optional[Callable] = None) -> bool:
         """
         Complete pick sequence:
         1. Open gripper first
-        2. Move to pickup position
-        3. Wait briefly
-        4. Close gripper
-        5. Move to travel position (safe height for movement)
+        2. Move to travel height above the target position (safe approach)
+        3. Descend to pickup position (keeping gripper open)
+        4. Wait briefly
+        5. Close gripper
+        6. Lift straight up (dynamic travel) before moving sideways
         """
         if status_callback:
             status_callback(f"Picking from {from_position}...")
@@ -215,31 +274,55 @@ class RobotController:
         if not self.open_gripper():
             self.logger.warning("Failed to open gripper, continuing anyway")
         
-        # Move to position
-        if not self.move_to_position(from_position, SPEED_NORMAL):
+        # Get the target position angles
+        target_angles = self.position_manager.get_position(from_position)
+        if target_angles is None:
+            self.logger.error(f"Position not found: {from_position}")
+            return False
+        
+        # Get travel position for safe height reference
+        travel_angles = self.position_manager.get_position('travel_position')
+        if travel_angles is None:
+            self.logger.warning("travel_position not found, moving directly")
+        else:
+            # Create approach position: target's base rotation (J1) but at travel height (J2, J3, J4)
+            approach_angles = target_angles.copy()
+            approach_angles[1] = travel_angles[1]  # Shoulder at travel height
+            approach_angles[2] = travel_angles[2]  # Elbow at travel config
+            approach_angles[3] = travel_angles[3]  # Wrist pitch at travel config
+            approach_angles[5] = self.current_angles[5]  # Keep gripper open
+            
+            if status_callback:
+                status_callback(f"Moving above {from_position}...")
+            
+            # First move to safe height above target
+            if not self.move_to_joint_angles(approach_angles, SPEED_NORMAL):
+                self.logger.warning("Could not move to approach position")
+        
+        # Now descend to the actual pick position (keeping gripper open)
+        if status_callback:
+            status_callback(f"Descending to {from_position}...")
+        
+        if not self.move_to_position_keep_gripper(from_position, SPEED_NORMAL):
             return False
         
         # Wait for stability
         time.sleep(0.3)
         
-        # Close gripper
+        # Now close gripper to grab the item
         if not self.close_gripper():
             return False
         
         # Wait for grip
         time.sleep(0.3)
         
-        # Move to travel position (safe height for carrying item)
+        # Lift straight up first (dynamic travel - keeps base rotation, only lifts)
         if status_callback:
-            status_callback("Moving to travel position...")
+            status_callback("Lifting item...")
         
-        if not self.move_to_position('travel_position', SPEED_NORMAL):
-            # Fallback: lift slightly if travel position fails
-            self.logger.warning("Travel position not available, lifting manually")
-            lifted_angles = self.current_angles.copy()
-            lifted_angles[1] = max(0, lifted_angles[1] - 10)  # Lift 10 degrees
-            if not self.move_to_joint_angles(lifted_angles, SPEED_SLOW):
-                return False
+        if not self.lift_to_travel_height(status_callback):
+            self.logger.warning("Could not lift to travel height")
+            # Continue anyway, next movement will handle it
         
         self.logger.info(f"Pick sequence completed from {from_position}")
         return True
@@ -248,37 +331,62 @@ class RobotController:
                               status_callback: Optional[Callable] = None) -> bool:
         """
         Complete place sequence:
-        1. Move to travel position first (if not already there)
-        2. Move to place position
-        3. Open gripper
-        4. Wait briefly
-        5. Move back to travel position
+        1. Already at travel height from pick sequence
+        2. Move to travel height above target position (safe approach)
+        3. Descend to place position (keeping gripper closed)
+        4. Open gripper to release
+        5. Wait briefly
+        6. Lift straight up (dynamic travel) before moving sideways
         """
         if status_callback:
             status_callback(f"Placing at {to_position}...")
         
-        # Ensure we're at travel position first for safe approach
-        if not self.move_to_position('travel_position', SPEED_NORMAL):
-            self.logger.warning("Could not move to travel position first")
-        
-        # Move to target position
-        if not self.move_to_position(to_position, SPEED_NORMAL):
+        # Get the target position angles
+        target_angles = self.position_manager.get_position(to_position)
+        if target_angles is None:
+            self.logger.error(f"Position not found: {to_position}")
             return False
         
-        # Open gripper to release item
+        # Get travel position for safe height reference
+        travel_angles = self.position_manager.get_position('travel_position')
+        if travel_angles is None:
+            self.logger.warning("travel_position not found, moving directly")
+        else:
+            # Create approach position: target's base rotation (J1) but at travel height (J2, J3, J4)
+            approach_angles = target_angles.copy()
+            approach_angles[1] = travel_angles[1]  # Shoulder at travel height
+            approach_angles[2] = travel_angles[2]  # Elbow at travel config
+            approach_angles[3] = travel_angles[3]  # Wrist pitch at travel config
+            approach_angles[5] = self.current_angles[5]  # Keep gripper closed (carrying item)
+            
+            if status_callback:
+                status_callback(f"Moving above {to_position}...")
+            
+            # First move to safe height above target
+            if not self.move_to_joint_angles(approach_angles, SPEED_NORMAL):
+                self.logger.warning("Could not move to approach position")
+        
+        # Now descend to the actual place position (keeping gripper closed)
+        if status_callback:
+            status_callback(f"Descending to {to_position}...")
+        
+        if not self.move_to_position_keep_gripper(to_position, SPEED_NORMAL):
+            return False
+        
+        # Now open gripper to release item
         if not self.open_gripper():
             return False
         
         # Wait for release
         time.sleep(0.3)
         
-        # Move back to travel position for safe retreat
-        if not self.move_to_position('travel_position', SPEED_NORMAL):
-            # Fallback: lift slightly
-            lifted_angles = self.current_angles.copy()
-            lifted_angles[1] = max(0, lifted_angles[1] - 10)
-            if not self.move_to_joint_angles(lifted_angles, SPEED_SLOW):
-                return False
+        # Lift straight up first (dynamic travel - keeps base rotation, only lifts)
+        if status_callback:
+            status_callback("Lifting arm...")
+        
+        if not self.lift_to_travel_height(status_callback):
+            self.logger.warning("Could not lift to travel height after placing")
+            # Continue anyway
         
         self.logger.info(f"Place sequence completed at {to_position}")
         return True

@@ -1,5 +1,5 @@
 """
-Return screen with live camera feed and detection
+Return screen - elegant design with live camera feed and detection
 """
 
 import tkinter as tk
@@ -13,13 +13,6 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent))
 
 from config.settings import (
-    THEME_COLOR_PRIMARY,
-    THEME_COLOR_SECONDARY,
-    THEME_COLOR_ACCENT,
-    THEME_COLOR_SUCCESS,
-    THEME_COLOR_DANGER,
-    THEME_COLOR_WARNING,
-    THEME_COLOR_TEXT_LIGHT,
     DETECTION_INTERVAL,
     INITIAL_WAIT_BEFORE_DETECTION,
     SAFETY_WAIT_AFTER_DETECTION,
@@ -29,9 +22,24 @@ from config.settings import (
 from utils.logger import RobotLogger
 
 
+# Modern color scheme (matching main_window)
+COLORS = {
+    'bg_dark': '#1a1a2e',
+    'bg_medium': '#16213e', 
+    'bg_light': '#0f3460',
+    'accent_blue': '#3498db',
+    'accent_green': '#27ae60',
+    'accent_orange': '#e67e22',
+    'accent_red': '#e74c3c',
+    'text_white': '#ffffff',
+    'text_gray': '#bdc3c7',
+    'card_bg': '#1e3a5f'
+}
+
+
 class ReturnScreen:
     """
-    Return interface with live camera feed
+    Elegant return interface with live camera feed
     """
     
     def __init__(self, parent, vision_system, robot_controller, state_manager, back_callback, status_callback):
@@ -44,32 +52,32 @@ class ReturnScreen:
         self.back_callback = back_callback
         self.status_callback = status_callback
         
-        self.frame = tk.Frame(parent, bg=THEME_COLOR_PRIMARY)
+        self.frame = tk.Frame(parent, bg=COLORS['bg_dark'])
         self.frame.pack(fill=tk.BOTH, expand=True)
         
         self.return_mode_active = False
         self.detection_thread = None
         self.operation_in_progress = False
-        self.is_active = True  # Flag to track if screen is still active
+        self.is_active = True
         
         self.create_ui()
-        
-        # Start return mode automatically
         self.start_return_mode()
     
     def create_ui(self):
         """Create return screen UI"""
-        # Header with back button
-        header = tk.Frame(self.frame, bg=THEME_COLOR_PRIMARY)
-        header.pack(fill=tk.X, pady=(0, 20))
+        # Header
+        header = tk.Frame(self.frame, bg=COLORS['bg_dark'])
+        header.pack(fill=tk.X, pady=(0, 10))
         
+        # Back button
         back_btn = tk.Button(
             header,
-            text="← Back",
+            text="← Back to Home",
             command=self.handle_back,
-            font=('Arial', 12),
-            bg=THEME_COLOR_SECONDARY,
-            fg=THEME_COLOR_TEXT_LIGHT,
+            font=('Arial', 11),
+            bg=COLORS['bg_medium'],
+            fg=COLORS['text_white'],
+            activebackground=COLORS['bg_light'],
             relief='flat',
             padx=15,
             pady=8,
@@ -77,176 +85,227 @@ class ReturnScreen:
         )
         back_btn.pack(side=tk.LEFT)
         
+        # Title
         title = tk.Label(
             header,
-            text="RETURN MODE",
-            font=('Arial', 24, 'bold'),
-            bg=THEME_COLOR_PRIMARY,
-            fg=THEME_COLOR_TEXT_LIGHT
+            text="↩️ RETURN AN ITEM",
+            font=('Arial', 20, 'bold'),
+            bg=COLORS['bg_dark'],
+            fg=COLORS['accent_green']
         )
         title.pack(side=tk.LEFT, padx=20)
         
-        # Main content area (camera + detection status)
-        content = tk.Frame(self.frame, bg=THEME_COLOR_PRIMARY)
-        content.pack(fill=tk.BOTH, expand=True, padx=20)
+        # Subtitle
+        subtitle = tk.Label(
+            header,
+            text="Place item in drop zone for automatic detection",
+            font=('Arial', 11),
+            bg=COLORS['bg_dark'],
+            fg=COLORS['text_gray']
+        )
+        subtitle.pack(side=tk.RIGHT, padx=20)
         
-        # Left side - Camera feed
-        camera_frame = tk.Frame(content, bg=THEME_COLOR_SECONDARY, relief='raised', bd=2)
+        # Divider
+        divider = tk.Frame(self.frame, bg=COLORS['bg_medium'], height=2)
+        divider.pack(fill=tk.X, pady=(0, 15))
+        
+        # Main content - split view
+        content = tk.Frame(self.frame, bg=COLORS['bg_dark'])
+        content.pack(fill=tk.BOTH, expand=True, padx=10)
+        
+        # Left side - Camera feed (larger)
+        camera_frame = tk.Frame(content, bg=COLORS['card_bg'], highlightbackground=COLORS['accent_blue'], highlightthickness=2)
         camera_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 10))
         
-        camera_label = tk.Label(
-            camera_frame,
-            text="Camera Feed",
+        camera_header = tk.Frame(camera_frame, bg=COLORS['bg_medium'])
+        camera_header.pack(fill=tk.X)
+        
+        camera_title = tk.Label(
+            camera_header,
+            text="📷 Live Camera Feed",
             font=('Arial', 12, 'bold'),
-            bg=THEME_COLOR_SECONDARY,
-            fg=THEME_COLOR_TEXT_LIGHT
+            bg=COLORS['bg_medium'],
+            fg=COLORS['text_white']
         )
-        camera_label.pack(pady=10)
+        camera_title.pack(pady=8)
         
-        self.camera_display = tk.Label(
-            camera_frame,
-            bg='black',
-            width=50,
-            height=30
-        )
-        self.camera_display.pack(padx=10, pady=(0, 10), fill=tk.BOTH, expand=True)
+        # Camera display container (fixed size)
+        camera_container = tk.Frame(camera_frame, bg='black', width=480, height=360)
+        camera_container.pack(padx=15, pady=15)
+        camera_container.pack_propagate(False)
         
-        # Right side - Detection status
-        status_frame = tk.Frame(content, bg=THEME_COLOR_SECONDARY, relief='raised', bd=2, width=300)
-        status_frame.pack(side=tk.RIGHT, fill=tk.Y)
-        status_frame.pack_propagate(False)
+        self.camera_display = tk.Label(camera_container, bg='black')
+        self.camera_display.pack(fill=tk.BOTH, expand=True)
+        
+        self.camera_width = 480
+        self.camera_height = 360
+        
+        # Right side - Detection status panel
+        status_panel = tk.Frame(content, bg=COLORS['card_bg'], width=280, highlightbackground=COLORS['accent_green'], highlightthickness=2)
+        status_panel.pack(side=tk.RIGHT, fill=tk.Y)
+        status_panel.pack_propagate(False)
+        
+        # Status panel header
+        status_header = tk.Frame(status_panel, bg=COLORS['bg_medium'])
+        status_header.pack(fill=tk.X)
         
         status_title = tk.Label(
-            status_frame,
-            text="Detection Status",
-            font=('Arial', 14, 'bold'),
-            bg=THEME_COLOR_SECONDARY,
-            fg=THEME_COLOR_TEXT_LIGHT
+            status_header,
+            text="🔍 Detection Status",
+            font=('Arial', 12, 'bold'),
+            bg=COLORS['bg_medium'],
+            fg=COLORS['text_white']
         )
-        status_title.pack(pady=15)
+        status_title.pack(pady=8)
         
-        # Status message
+        # Status content
+        status_content = tk.Frame(status_panel, bg=COLORS['card_bg'])
+        status_content.pack(fill=tk.BOTH, expand=True, padx=15, pady=15)
+        
+        # Main status message
+        self.status_icon = tk.Label(
+            status_content,
+            text="🔄",
+            font=('Arial', 36),
+            bg=COLORS['card_bg']
+        )
+        self.status_icon.pack(pady=(20, 10))
+        
         self.status_message = tk.Label(
-            status_frame,
+            status_content,
             text="Initializing...",
-            font=('Arial', 12),
-            bg=THEME_COLOR_SECONDARY,
-            fg=THEME_COLOR_TEXT_LIGHT,
-            wraplength=250,
+            font=('Arial', 13, 'bold'),
+            bg=COLORS['card_bg'],
+            fg=COLORS['text_white'],
+            wraplength=240,
             justify=tk.CENTER
         )
-        self.status_message.pack(pady=20)
+        self.status_message.pack(pady=10)
         
-        # Detected item
+        # Detected item display
+        self.detected_frame = tk.Frame(status_content, bg=COLORS['bg_medium'])
+        self.detected_frame.pack(fill=tk.X, pady=15)
+        
         self.detected_label = tk.Label(
-            status_frame,
+            self.detected_frame,
             text="",
             font=('Arial', 14, 'bold'),
-            bg=THEME_COLOR_SECONDARY,
-            fg=THEME_COLOR_SUCCESS,
-            wraplength=250
+            bg=COLORS['bg_medium'],
+            fg=COLORS['accent_green'],
+            wraplength=240
         )
         self.detected_label.pack(pady=10)
         
-        # Confidence
         self.confidence_label = tk.Label(
-            status_frame,
+            self.detected_frame,
             text="",
             font=('Arial', 11),
-            bg=THEME_COLOR_SECONDARY,
-            fg=THEME_COLOR_TEXT_LIGHT
+            bg=COLORS['bg_medium'],
+            fg=COLORS['text_gray']
         )
-        self.confidence_label.pack(pady=5)
+        self.confidence_label.pack()
         
         # Validation status
         self.validation_label = tk.Label(
-            status_frame,
+            status_content,
             text="",
             font=('Arial', 11, 'bold'),
-            bg=THEME_COLOR_SECONDARY,
-            fg=THEME_COLOR_SUCCESS
+            bg=COLORS['card_bg'],
+            fg=COLORS['accent_green']
         )
         self.validation_label.pack(pady=10)
         
-        # Progress bar
-        self.progress_frame = tk.Frame(status_frame, bg=THEME_COLOR_SECONDARY)
-        self.progress_frame.pack(pady=20)
+        # Progress section
+        self.progress_frame = tk.Frame(status_content, bg=COLORS['card_bg'])
+        self.progress_frame.pack(fill=tk.X, pady=10)
         
         self.progress_label = tk.Label(
             self.progress_frame,
             text="",
             font=('Arial', 10),
-            bg=THEME_COLOR_SECONDARY,
-            fg=THEME_COLOR_TEXT_LIGHT,
-            wraplength=250
+            bg=COLORS['card_bg'],
+            fg=COLORS['text_white'],
+            wraplength=240
         )
         self.progress_label.pack()
         
         self.progress_bar = ttk.Progressbar(
             self.progress_frame,
             mode='indeterminate',
-            length=250
+            length=220
         )
         self.progress_bar.pack(pady=5)
     
     def start_return_mode(self):
         """Initiate return mode"""
         self.logger.info("Starting return mode")
-        self.status_callback("Return mode - waiting for item...")
+        self.status_callback("Return mode - initializing...")
         
-        # Move robot to observation position
         def move_robot():
             if not self.is_active:
                 return
             
             try:
-                self.status_message.config(text="Moving to observation position...")
+                self.status_message.config(text="Moving robot to\nobservation position...")
+                self.status_icon.config(text="🤖")
             except tk.TclError:
-                return  # Widget destroyed
+                return
             
             if self.robot.move_to_observation_position(self.status_callback):
-                # Wait initial period
+                # Countdown
                 for i in range(int(INITIAL_WAIT_BEFORE_DETECTION)):
                     if not self.is_active:
                         return
                     remaining = int(INITIAL_WAIT_BEFORE_DETECTION) - i
                     try:
-                        self.parent.after(0, lambda r=remaining: self.status_message.config(
-                            text=f"Please place item in drop zone...\n\nStarting detection in {r}s"
-                        ) if self.is_active else None)
+                        self.parent.after(0, lambda r=remaining: self._update_countdown(r) if self.is_active else None)
                     except tk.TclError:
                         return
                     time.sleep(1)
                 
-                # Start detection only if still active
                 if self.is_active:
                     self.return_mode_active = True
                     self.parent.after(0, self.start_detection_thread)
             else:
                 if self.is_active:
                     self.parent.after(0, lambda: messagebox.showerror(
-                        "Error",
-                        "Failed to move robot to observation position"
+                        "Error", "Failed to move robot to observation position"
                     ))
                     self.parent.after(0, self.handle_back)
         
         thread = threading.Thread(target=move_robot, daemon=True)
         thread.start()
     
+    def _update_countdown(self, remaining):
+        """Update countdown display"""
+        try:
+            self.status_icon.config(text="⏳")
+            self.status_message.config(
+                text=f"Place item in drop zone\n\nStarting detection in {remaining}s"
+            )
+        except tk.TclError:
+            pass
+    
     def start_detection_thread(self):
-        """Start continuous detection thread"""
+        """Start continuous detection"""
         self.return_mode_active = True
+        
+        try:
+            self.status_icon.config(text="👁️")
+            self.status_message.config(text="Watching for items...")
+        except tk.TclError:
+            pass
+        
         self.detection_thread = threading.Thread(
             target=self.continuous_detection_loop,
             daemon=True
         )
         self.detection_thread.start()
         
-        # Start camera feed update
         self.update_camera_feed()
     
     def continuous_detection_loop(self):
-        """Background thread for continuous classification"""
+        """Background detection loop"""
         detection_count = 0
         last_detected_item = None
         
@@ -259,48 +318,36 @@ class ReturnScreen:
                 if not self.is_active:
                     break
                 
-                # Capture and classify
                 result = self.vision.classify_item()
                 
-                # Update GUI only if still active
                 if self.is_active:
                     try:
                         self.parent.after(0, lambda r=result: self.update_detection_status(r) if self.is_active else None)
                     except tk.TclError:
                         break
                 
-                # Check if valid detection
                 if result.get('success', False):
                     detected_class = result['class_name']
-                    confidence = result['confidence']
                     
-                    # Same item detected consistently?
                     if detected_class == last_detected_item:
                         detection_count += 1
                     else:
                         detection_count = 1
                         last_detected_item = detected_class
                     
-                    # Stable detection?
                     if detection_count >= STABLE_DETECTION_COUNT:
-                        # Trigger return sequence
-                        self.logger.info(f"Stable detection: {detected_class} ({confidence:.2%})")
+                        self.logger.info(f"Stable detection: {detected_class}")
                         self.parent.after(0, lambda: self.execute_return_sequence(detected_class))
                         
-                        # Reset
                         detection_count = 0
                         last_detected_item = None
                         
-                        # Wait for return to complete
                         while self.operation_in_progress and self.return_mode_active and self.is_active:
                             time.sleep(0.5)
-                
                 else:
-                    # No valid detection
                     detection_count = 0
                     last_detected_item = None
                 
-                # Wait before next detection
                 time.sleep(DETECTION_INTERVAL)
                 
             except Exception as e:
@@ -317,91 +364,85 @@ class ReturnScreen:
         try:
             frame = self.vision.get_live_feed()
             if frame is not None:
-                # Convert to PIL Image
                 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 pil_image = Image.fromarray(frame_rgb)
+                pil_image = pil_image.resize((self.camera_width, self.camera_height), Image.Resampling.LANCZOS)
                 
-                # Resize to fit display
-                pil_image.thumbnail((400, 300), Image.Resampling.LANCZOS)
-                
-                # Convert to PhotoImage
                 photo = ImageTk.PhotoImage(pil_image)
-                
-                # Update label
                 self.camera_display.config(image=photo)
-                self.camera_display.image = photo  # Keep reference
-        
+                self.camera_display.image = photo
         except Exception as e:
-            self.logger.debug(f"Camera feed update error: {e}")
+            self.logger.debug(f"Camera feed error: {e}")
         
-        # Schedule next update (30 FPS) only if still active
         if self.return_mode_active and self.is_active:
             try:
                 self.parent.after(33, self.update_camera_feed)
             except tk.TclError:
-                pass  # Widget destroyed
+                pass
     
     def update_detection_status(self, result: dict):
-        """Update detection panel with classification results"""
+        """Update detection panel"""
         if not self.is_active:
             return
         
         try:
             if result.get('success', False):
-                # Valid detection
-                self.status_message.config(text="Item detected!", fg=THEME_COLOR_SUCCESS)
+                self.status_icon.config(text="✅")
+                self.status_message.config(text="Item detected!", fg=COLORS['accent_green'])
                 self.detected_label.config(
-                    text=f"Detected:\n{result['class_name']}",
-                    fg=THEME_COLOR_SUCCESS
+                    text=f"📦 {result['class_name']}",
+                    fg=COLORS['accent_green']
                 )
                 self.confidence_label.config(
                     text=f"Confidence: {result['confidence']:.1%}"
                 )
                 self.validation_label.config(
-                    text="✓ Valid item",
-                    fg=THEME_COLOR_SUCCESS
+                    text="✓ Valid item - Processing...",
+                    fg=COLORS['accent_green']
                 )
             elif 'error' in result:
-                # Error or invalid
-                self.status_message.config(text="Waiting for item...", fg=THEME_COLOR_TEXT_LIGHT)
+                self.status_icon.config(text="👁️")
+                self.status_message.config(text="Watching for items...", fg=COLORS['text_white'])
                 
                 if result.get('class_name'):
                     self.detected_label.config(
-                        text=f"Detected:\n{result['class_name']}",
-                        fg=THEME_COLOR_WARNING
+                        text=f"📦 {result['class_name']}",
+                        fg=COLORS['accent_orange']
                     )
                     self.confidence_label.config(
                         text=f"Confidence: {result.get('confidence', 0):.1%}"
                     )
                     self.validation_label.config(
-                        text=f"✗ {result['error']}",
-                        fg=THEME_COLOR_DANGER
+                        text=f"⚠ {result['error']}",
+                        fg=COLORS['accent_orange']
                     )
                 else:
                     self.detected_label.config(text="")
                     self.confidence_label.config(text="")
-                    self.validation_label.config(text="Place item in view")
+                    self.validation_label.config(text="Place item in camera view")
             else:
-                # Waiting
-                self.status_message.config(text="Waiting for item...", fg=THEME_COLOR_TEXT_LIGHT)
+                self.status_icon.config(text="👁️")
+                self.status_message.config(text="Watching for items...", fg=COLORS['text_white'])
                 self.detected_label.config(text="")
                 self.confidence_label.config(text="")
                 self.validation_label.config(text="")
         except tk.TclError:
-            pass  # Widget destroyed
+            pass
     
     def execute_return_sequence(self, item_name: str):
-        """Execute return operation after valid detection"""
+        """Execute return operation"""
         if self.operation_in_progress or not self.is_active:
             return
         
         self.operation_in_progress = True
         
-        # Show waiting message
-        self.status_message.config(text=f"Processing...\n\nWaiting {SAFETY_WAIT_AFTER_DETECTION}s for safety")
+        try:
+            self.status_icon.config(text="⏳")
+            self.status_message.config(text=f"Processing...\n\nSafety wait: {SAFETY_WAIT_AFTER_DETECTION}s")
+        except tk.TclError:
+            pass
         
         def return_thread():
-            # Safety wait
             for _ in range(int(SAFETY_WAIT_AFTER_DETECTION * 10)):
                 if not self.is_active:
                     return
@@ -410,17 +451,15 @@ class ReturnScreen:
             if not self.is_active:
                 return
             
-            # Show progress
             try:
-                self.parent.after(0, lambda: self.progress_label.config(text="Returning item...") if self.is_active else None)
+                self.parent.after(0, lambda: self.progress_label.config(text=f"Returning {item_name}...") if self.is_active else None)
                 self.parent.after(0, lambda: self.progress_bar.start() if self.is_active else None)
+                self.parent.after(0, lambda: self.status_icon.config(text="🤖") if self.is_active else None)
             except tk.TclError:
                 return
             
-            # Execute return
             result = self.robot.return_item(item_name, status_callback=self.status_callback)
             
-            # Complete only if still active
             if self.is_active:
                 self.parent.after(0, lambda: self._return_complete(item_name, result))
         
@@ -441,53 +480,66 @@ class ReturnScreen:
         self.operation_in_progress = False
         
         if result.get('success', False):
-            # Update state
             self.state.mark_available(item_name)
             
-            # Show success
             try:
+                self.status_icon.config(text="✅")
                 self.status_message.config(
-                    text=f"✓ {item_name} returned successfully!\n\nWaiting for next item...",
-                    fg=THEME_COLOR_SUCCESS
+                    text=f"✓ {item_name}\nreturned successfully!",
+                    fg=COLORS['accent_green']
                 )
                 self.detected_label.config(text="")
                 self.confidence_label.config(text="")
-                self.validation_label.config(text="")
+                self.validation_label.config(text="Waiting for next item...")
             except tk.TclError:
                 pass
             
             messagebox.showinfo(
-                "Return Complete",
+                "✓ Return Complete",
                 f"{item_name} has been returned to storage."
             )
+            
+            # Reset status after a moment
+            try:
+                self.parent.after(2000, self._reset_status)
+            except tk.TclError:
+                pass
         else:
-            # Show error
             error_msg = result.get('message', 'Unknown error')
             try:
+                self.status_icon.config(text="❌")
                 self.status_message.config(
-                    text=f"Error returning item\n\n{error_msg}",
-                    fg=THEME_COLOR_DANGER
+                    text=f"Return failed\n\n{error_msg}",
+                    fg=COLORS['accent_red']
                 )
             except tk.TclError:
                 pass
             
             messagebox.showerror(
                 "Return Failed",
-                f"Failed to return {item_name}:\n\n{error_msg}"
+                f"Could not return {item_name}:\n\n{error_msg}"
             )
     
+    def _reset_status(self):
+        """Reset status display for next item"""
+        if not self.is_active:
+            return
+        try:
+            self.status_icon.config(text="👁️")
+            self.status_message.config(text="Watching for items...", fg=COLORS['text_white'])
+        except tk.TclError:
+            pass
+    
     def stop_return_mode(self):
-        """Exit return mode"""
+        """Stop return mode"""
         self.logger.info("Stopping return mode")
         self.is_active = False
         self.return_mode_active = False
         self.operation_in_progress = False
         
-        # Wait for thread to stop (with timeout)
         if self.detection_thread and self.detection_thread.is_alive():
             self.detection_thread.join(timeout=1)
         
-        # Move robot home in background
         def move_home():
             try:
                 self.robot.move_home()
@@ -502,7 +554,7 @@ class ReturnScreen:
         if self.operation_in_progress:
             result = messagebox.askyesno(
                 "Operation in Progress",
-                "A return operation is in progress. Are you sure you want to go back?\n\nThe robot will stop and return home."
+                "A return operation is in progress. Go back anyway?\n\nThe robot will stop and return home."
             )
             if not result:
                 return
@@ -511,6 +563,6 @@ class ReturnScreen:
         self.back_callback()
     
     def cleanup(self):
-        """Cleanup when leaving screen"""
+        """Cleanup when leaving"""
         self.logger.info("Cleaning up return screen")
         self.stop_return_mode()

@@ -1,5 +1,5 @@
 """
-Borrow screen for borrowing items
+Borrow screen - elegant design for borrowing items
 """
 
 import tkinter as tk
@@ -9,20 +9,29 @@ import sys
 from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent))
 
-from config.settings import (
-    THEME_COLOR_PRIMARY,
-    THEME_COLOR_SECONDARY,
-    THEME_COLOR_ACCENT,
-    THEME_COLOR_SUCCESS,
-    THEME_COLOR_TEXT_LIGHT,
-    THEME_COLOR_TEXT_DARK
-)
 from utils.logger import RobotLogger
+
+
+# Modern color scheme (matching main_window)
+COLORS = {
+    'bg_dark': '#1a1a2e',
+    'bg_medium': '#16213e', 
+    'bg_light': '#0f3460',
+    'accent_blue': '#3498db',
+    'accent_green': '#27ae60',
+    'accent_orange': '#e67e22',
+    'accent_red': '#e74c3c',
+    'text_white': '#ffffff',
+    'text_gray': '#bdc3c7',
+    'card_bg': '#1e3a5f',
+    'card_available': '#1e4d2b',
+    'card_unavailable': '#2d2d44'
+}
 
 
 class BorrowScreen:
     """
-    Borrow interface
+    Elegant borrow interface with item cards
     """
     
     def __init__(self, parent, state_manager, robot_controller, back_callback, status_callback):
@@ -34,28 +43,30 @@ class BorrowScreen:
         self.back_callback = back_callback
         self.status_callback = status_callback
         
-        self.frame = tk.Frame(parent, bg=THEME_COLOR_PRIMARY)
+        self.frame = tk.Frame(parent, bg=COLORS['bg_dark'])
         self.frame.pack(fill=tk.BOTH, expand=True)
         
         self.operation_in_progress = False
-        self.is_active = True  # Flag to track if screen is still active
+        self.is_active = True
         
         self.create_ui()
         self.refresh_item_list()
     
     def create_ui(self):
         """Create borrow screen UI"""
-        # Header with back button
-        header = tk.Frame(self.frame, bg=THEME_COLOR_PRIMARY)
-        header.pack(fill=tk.X, pady=(0, 20))
+        # Header
+        header = tk.Frame(self.frame, bg=COLORS['bg_dark'])
+        header.pack(fill=tk.X, pady=(0, 10))
         
+        # Back button
         back_btn = tk.Button(
             header,
-            text="← Back",
+            text="← Back to Home",
             command=self.handle_back,
-            font=('Arial', 12),
-            bg=THEME_COLOR_SECONDARY,
-            fg=THEME_COLOR_TEXT_LIGHT,
+            font=('Arial', 11),
+            bg=COLORS['bg_medium'],
+            fg=COLORS['text_white'],
+            activebackground=COLORS['bg_light'],
             relief='flat',
             padx=15,
             pady=8,
@@ -63,49 +74,68 @@ class BorrowScreen:
         )
         back_btn.pack(side=tk.LEFT)
         
+        # Title
+        title_frame = tk.Frame(header, bg=COLORS['bg_dark'])
+        title_frame.pack(side=tk.LEFT, padx=20)
+        
         title = tk.Label(
+            title_frame,
+            text="📦 BORROW AN ITEM",
+            font=('Arial', 20, 'bold'),
+            bg=COLORS['bg_dark'],
+            fg=COLORS['accent_blue']
+        )
+        title.pack(side=tk.LEFT)
+        
+        # Subtitle
+        subtitle = tk.Label(
             header,
-            text="BORROW MODE",
-            font=('Arial', 24, 'bold'),
-            bg=THEME_COLOR_PRIMARY,
-            fg=THEME_COLOR_TEXT_LIGHT
+            text="Select an available item to borrow",
+            font=('Arial', 11),
+            bg=COLORS['bg_dark'],
+            fg=COLORS['text_gray']
         )
-        title.pack(side=tk.LEFT, padx=20)
+        subtitle.pack(side=tk.RIGHT, padx=20)
         
-        # Available items label
-        info_label = tk.Label(
-            self.frame,
-            text="Available Items:",
-            font=('Arial', 16, 'bold'),
-            bg=THEME_COLOR_PRIMARY,
-            fg=THEME_COLOR_TEXT_LIGHT,
-            anchor=tk.W
-        )
-        info_label.pack(fill=tk.X, padx=20, pady=(10, 5))
+        # Divider
+        divider = tk.Frame(self.frame, bg=COLORS['bg_medium'], height=2)
+        divider.pack(fill=tk.X, pady=(0, 15))
         
-        # Items grid container
-        self.items_container = tk.Frame(self.frame, bg=THEME_COLOR_PRIMARY)
-        self.items_container.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
+        # Items grid container with scrollable area
+        self.items_container = tk.Frame(self.frame, bg=COLORS['bg_dark'])
+        self.items_container.pack(fill=tk.BOTH, expand=True, padx=10)
         
-        # Progress bar (hidden initially)
-        self.progress_frame = tk.Frame(self.frame, bg=THEME_COLOR_PRIMARY)
+        # Progress section (hidden initially)
+        self.progress_frame = tk.Frame(self.frame, bg=COLORS['bg_medium'])
         self.progress_frame.pack(fill=tk.X, padx=20, pady=10)
+        self.progress_frame.pack_forget()  # Hide initially
+        
+        progress_inner = tk.Frame(self.progress_frame, bg=COLORS['bg_medium'])
+        progress_inner.pack(pady=15, padx=20)
+        
+        self.progress_icon = tk.Label(
+            progress_inner,
+            text="🔄",
+            font=('Arial', 24),
+            bg=COLORS['bg_medium']
+        )
+        self.progress_icon.pack()
         
         self.progress_label = tk.Label(
-            self.progress_frame,
+            progress_inner,
             text="",
             font=('Arial', 12),
-            bg=THEME_COLOR_PRIMARY,
-            fg=THEME_COLOR_TEXT_LIGHT
+            bg=COLORS['bg_medium'],
+            fg=COLORS['text_white']
         )
-        self.progress_label.pack()
+        self.progress_label.pack(pady=(10, 5))
         
         self.progress_bar = ttk.Progressbar(
-            self.progress_frame,
+            progress_inner,
             mode='indeterminate',
             length=400
         )
-        self.progress_bar.pack(pady=5)
+        self.progress_bar.pack()
     
     def refresh_item_list(self):
         """Update item display based on current availability"""
@@ -115,64 +145,18 @@ class BorrowScreen:
         
         # Get all items and their status
         all_status = self.state.get_all_status()
-        available_items = self.state.get_available_items()
         
         # Create grid of item cards (3 columns)
         row = 0
         col = 0
         
         for item_name, status in all_status.items():
-            # Create item card
             is_available = status == self.state.STATUS_AVAILABLE
             
-            card = tk.Frame(
-                self.items_container,
-                bg=THEME_COLOR_ACCENT if is_available else THEME_COLOR_SECONDARY,
-                relief='raised',
-                bd=2
-            )
-            card.grid(row=row, column=col, padx=10, pady=10, sticky='nsew')
+            # Create item card
+            card = self.create_item_card(item_name, is_available)
+            card.grid(row=row, column=col, padx=8, pady=8, sticky='nsew')
             
-            # Item name
-            name_label = tk.Label(
-                card,
-                text=item_name,
-                font=('Arial', 14, 'bold'),
-                bg=THEME_COLOR_ACCENT if is_available else THEME_COLOR_SECONDARY,
-                fg=THEME_COLOR_TEXT_LIGHT,
-                wraplength=180
-            )
-            name_label.pack(pady=(20, 10))
-            
-            # Status indicator
-            status_text = "Available" if is_available else "Loaned Out"
-            status_label = tk.Label(
-                card,
-                text=status_text,
-                font=('Arial', 10),
-                bg=THEME_COLOR_ACCENT if is_available else THEME_COLOR_SECONDARY,
-                fg=THEME_COLOR_TEXT_LIGHT if is_available else '#95A5A6'
-            )
-            status_label.pack(pady=(0, 10))
-            
-            # Borrow button
-            btn_text = "BORROW" if is_available else "Not Available"
-            borrow_btn = tk.Button(
-                card,
-                text=btn_text,
-                command=lambda name=item_name: self.borrow_item(name),
-                font=('Arial', 12, 'bold'),
-                bg=THEME_COLOR_SUCCESS if is_available else '#7F8C8D',
-                fg=THEME_COLOR_TEXT_LIGHT,
-                relief='flat',
-                padx=20,
-                pady=10,
-                cursor='hand2' if is_available else 'arrow',
-                state=tk.NORMAL if is_available else tk.DISABLED
-            )
-            borrow_btn.pack(pady=(0, 20))
-            
-            # Update grid position
             col += 1
             if col >= 3:
                 col = 0
@@ -182,32 +166,127 @@ class BorrowScreen:
         for i in range(3):
             self.items_container.columnconfigure(i, weight=1)
     
+    def create_item_card(self, item_name: str, is_available: bool):
+        """Create a styled item card"""
+        bg_color = COLORS['card_available'] if is_available else COLORS['card_unavailable']
+        border_color = COLORS['accent_green'] if is_available else COLORS['text_gray']
+        
+        card = tk.Frame(
+            self.items_container,
+            bg=bg_color,
+            highlightbackground=border_color,
+            highlightthickness=2
+        )
+        
+        # Card content
+        content = tk.Frame(card, bg=bg_color)
+        content.pack(padx=15, pady=15, fill=tk.BOTH, expand=True)
+        
+        # Item icon (based on item name)
+        icon = self.get_item_icon(item_name)
+        icon_label = tk.Label(
+            content,
+            text=icon,
+            font=('Arial', 28),
+            bg=bg_color
+        )
+        icon_label.pack()
+        
+        # Item name
+        name_label = tk.Label(
+            content,
+            text=item_name,
+            font=('Arial', 13, 'bold'),
+            bg=bg_color,
+            fg=COLORS['text_white'],
+            wraplength=160
+        )
+        name_label.pack(pady=(8, 5))
+        
+        # Status badge
+        status_text = "✓ Available" if is_available else "✗ On Loan"
+        status_color = COLORS['accent_green'] if is_available else COLORS['accent_orange']
+        
+        status_label = tk.Label(
+            content,
+            text=status_text,
+            font=('Arial', 10),
+            bg=bg_color,
+            fg=status_color
+        )
+        status_label.pack(pady=(0, 10))
+        
+        # Borrow button
+        if is_available:
+            btn = tk.Button(
+                content,
+                text="BORROW",
+                command=lambda name=item_name: self.borrow_item(name),
+                font=('Arial', 11, 'bold'),
+                bg=COLORS['accent_blue'],
+                fg='white',
+                activebackground='#2980b9',
+                relief='flat',
+                padx=25,
+                pady=8,
+                cursor='hand2'
+            )
+        else:
+            btn = tk.Button(
+                content,
+                text="Unavailable",
+                font=('Arial', 11),
+                bg=COLORS['text_gray'],
+                fg=COLORS['bg_dark'],
+                relief='flat',
+                padx=25,
+                pady=8,
+                state=tk.DISABLED
+            )
+        btn.pack()
+        
+        return card
+    
+    def get_item_icon(self, item_name: str) -> str:
+        """Get appropriate icon for item"""
+        icons = {
+            'Chair': '🪑',
+            'Computer Keyboard': '⌨️',
+            'Computer Mouse': '🖱️',
+            'Headphones': '🎧',
+            'Mobile Phone': '📱',
+            'Pen': '🖊️'
+        }
+        return icons.get(item_name, '📦')
+    
     def borrow_item(self, item_name: str):
         """Execute borrow operation with status updates"""
         if self.operation_in_progress:
-            messagebox.showwarning("Operation in Progress", "Please wait for current operation to complete.")
+            messagebox.showwarning("Please Wait", "An operation is already in progress.")
             return
         
         if not self.state.is_available(item_name):
-            messagebox.showerror("Not Available", f"{item_name} is currently loaned out.")
+            messagebox.showerror("Not Available", f"{item_name} is currently on loan.")
             return
         
         # Confirm
         result = messagebox.askyesno(
             "Confirm Borrow",
-            f"Borrow {item_name}?\n\nThe robot will retrieve it from storage and deliver it to the drop zone."
+            f"Borrow {item_name}?\n\nThe robot will retrieve it from storage\nand deliver it to the drop zone.",
+            icon='question'
         )
         
         if not result:
             return
         
-        # Disable UI and show progress
+        # Show progress
         self.operation_in_progress = True
-        self.refresh_item_list()
-        self.progress_label.config(text="Borrowing item... Please wait")
+        self.progress_frame.pack(fill=tk.X, padx=20, pady=10)
+        self.progress_label.config(text=f"Borrowing {item_name}...")
         self.progress_bar.start(10)
+        self.refresh_item_list()
         
-        # Run borrow operation in background thread
+        # Run in background
         thread = threading.Thread(
             target=self._borrow_thread,
             args=(item_name,),
@@ -222,28 +301,21 @@ class BorrowScreen:
                 try:
                     self.progress_label.config(text=msg)
                 except tk.TclError:
-                    pass  # Widget may be destroyed
+                    pass
         
         try:
-            # Check if still active before proceeding
             if not self.is_active:
                 return
             
-            # Execute borrow
             result = self.robot.borrow_item(item_name, status_callback=update_status)
             
-            # Check if still active before updating UI
             if not self.is_active:
                 return
             
             if result['success']:
-                # Update state
                 self.state.mark_loaned(item_name)
-                
-                # Show success
                 self.parent.after(0, lambda: self._borrow_complete(item_name, True, "Success!"))
             else:
-                # Show error
                 self.parent.after(0, lambda: self._borrow_complete(
                     item_name, False, result.get('message', 'Unknown error')
                 ))
@@ -254,12 +326,13 @@ class BorrowScreen:
                 self.parent.after(0, lambda: self._borrow_complete(item_name, False, str(e)))
     
     def _borrow_complete(self, item_name: str, success: bool, message: str):
-        """Handle borrow completion (runs on main thread)"""
+        """Handle borrow completion"""
         if not self.is_active:
             return
         
         try:
             self.progress_bar.stop()
+            self.progress_frame.pack_forget()
         except tk.TclError:
             pass
         
@@ -267,31 +340,29 @@ class BorrowScreen:
         
         if success:
             messagebox.showinfo(
-                "Borrow Complete",
+                "✓ Borrow Complete",
                 f"{item_name} has been delivered to the drop zone.\n\nPlease collect your item."
             )
             self.status_callback("Ready")
         else:
             messagebox.showerror(
                 "Borrow Failed",
-                f"Failed to borrow {item_name}:\n\n{message}"
+                f"Could not borrow {item_name}:\n\n{message}"
             )
-            self.status_callback("Error - see logs")
+            self.status_callback("Error")
         
-        # Refresh UI only if still active
         if self.is_active:
             try:
                 self.refresh_item_list()
-                self.progress_label.config(text="")
             except tk.TclError:
                 pass
     
     def handle_back(self):
-        """Handle back button - cleanup and return to main menu"""
+        """Handle back button"""
         if self.operation_in_progress:
             result = messagebox.askyesno(
                 "Operation in Progress",
-                "An operation is in progress. Are you sure you want to go back?\n\nThe robot will continue its current movement."
+                "An operation is in progress. Go back anyway?\n\nThe robot will continue its movement."
             )
             if not result:
                 return
